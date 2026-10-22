@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '8';
+const APP_VERSION = '9';
 const STORE_KEY = 'yarukoto.tasks.v1';
 const THEME_KEY = 'yarukoto.theme';
 const BADGE_KEY = 'yarukoto.badge';
@@ -259,7 +259,7 @@ function parseToken(raw) {
   if (tok === '!' || tok === '！') return { star: true };
   let m;
   if ((m = tok.match(/^([日月火水木金土])曜日?$/))) return { due: nextDow(WEEK.indexOf(m[1]), false) };
-  if ((m = tok.match(/^(\d{1,2})[/／](\d{1,2})$/))) {
+  if ((m = tok.match(/^(\d{1,2})[/／](\d{1,2})$/)) || (m = tok.match(/^(\d{1,2})月(\d{1,2})日$/))) {
     const d = monthDay(+m[1], +m[2]);
     if (d) return { due: d };
   }
@@ -272,13 +272,38 @@ function parseToken(raw) {
   return null;
 }
 
+// 言葉の末尾にくっついた日付・時刻（「歯医者11/16」「会議15:00」）
+const ATTACHED_DATE = /^(.*?\S)(\d{1,2}[/／]\d{1,2}|\d{1,2}月\d{1,2}日|\d{1,2}[:：]\d{2}|\d{1,2}時半?)$/;
+
+// 1 語の末尾から日付・時刻を最大 2 つ切り出す。戻り値は [残りの語, 読み取った値の一覧]
+function peelAttached(word) {
+  const found = [];
+  for (let k = 0; k < 2; k++) {
+    // 全角数字を半角にしても文字数は変わらないので、位置はそのまま使える
+    const m = toHalfWidth(word).match(ATTACHED_DATE);
+    // 数字の途中で切らない（「11/16」だけを「1」と「1/16」に分けない）
+    if (!m || /\d$/.test(m[1])) break;
+    const r = parseToken(m[2]);
+    if (!r) break;
+    found.unshift(r);
+    word = word.slice(0, m[1].length);
+  }
+  return [word, found];
+}
+
 function parseQuick(text) {
   const rest = [];
   const out = {};
   for (const tok of text.trim().split(/\s+/)) {
-    const r = tok && parseToken(tok);
-    if (r) Object.assign(out, r);
-    else if (tok) rest.push(tok);
+    if (!tok) continue;
+    const r = parseToken(tok);
+    if (r) {
+      Object.assign(out, r);
+      continue;
+    }
+    const [word, found] = peelAttached(tok);
+    found.forEach((f) => Object.assign(out, f));
+    rest.push(word);
   }
   // 日付の言葉だけを入力した場合はそのままタイトルにする
   if (!rest.length) return { title: text.trim() };
@@ -318,10 +343,10 @@ function animateOut(el, delay = 0) {
   return sleep(delay).then(() => Promise.race([
     el.animate(
       [{ height: `${el.offsetHeight}px`, opacity: 1 }, { height: '0px', opacity: 0 }],
-      { duration: 240, easing: 'ease-in', fill: 'forwards' },
+      { duration: 320, easing: 'cubic-bezier(.45, 0, .2, 1)', fill: 'forwards' },
     ).finished.catch(() => {}),
     // 描画が止まっている（バックグラウンドなど）ときもアニメーション待ちで固まらないようにする
-    sleep(400),
+    sleep(450),
   ]));
 }
 
@@ -363,36 +388,60 @@ function swipeLeftAction(t) {
     : { label: '今日へ', due: today() };
 }
 
-function enableSwipe(li, row, { onRight, onLeft }) {
+const LONG_PRESS_MS = 450;
+
+function enableSwipe(li, row, { onRight, onLeft, onLongPress }) {
   const THRESHOLD = 80;
   let x0 = null;
   let y0 = 0;
   let dx = 0;
   let dragging = false;
+  let pressTimer = null;
 
+  // 長押し：指を動かさずに押し続けたら詳細を開く
+  const cancelPress = () => {
+    clearTimeout(pressTimer);
+    pressTimer = null;
+    li.classList.remove('pressing');
+  };
   const reset = () => {
     x0 = null;
+    cancelPress();
     li.classList.remove('swiping', 'sw-armed', 'sw-right', 'sw-left');
     row.style.transform = '';
   };
+  // iOS の長押しメニュー（文字の選択やコピー）を出さない
+  row.addEventListener('contextmenu', (e) => e.preventDefault());
   // スワイプ直後のタップで編集画面が開かないようにする
-  const swallowClick = () => {
+  const swallowClick = (ms = 80) => {
     const stopClick = (e) => { e.stopPropagation(); e.preventDefault(); };
     row.addEventListener('click', stopClick, { capture: true, once: true });
-    setTimeout(() => row.removeEventListener('click', stopClick, { capture: true }), 80);
+    setTimeout(() => row.removeEventListener('click', stopClick, { capture: true }), ms);
   };
 
   row.addEventListener('pointerdown', (e) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (e.target.closest('.check, .star, .pill')) return;
     x0 = e.clientX;
     y0 = e.clientY;
     dx = 0;
     dragging = false;
+    if (onLongPress) {
+      li.classList.add('pressing');
+      pressTimer = setTimeout(() => {
+        pressTimer = null;
+        x0 = null;
+        li.classList.remove('pressing');
+        swallowClick(600);
+        onLongPress();
+      }, LONG_PRESS_MS);
+    }
   });
   row.addEventListener('pointermove', (e) => {
     if (x0 == null) return;
     const mx = e.clientX - x0;
     const my = e.clientY - y0;
+    if (Math.abs(mx) > 8 || Math.abs(my) > 8) cancelPress();
     if (!dragging) {
       if (Math.abs(my) > 10 && Math.abs(my) > Math.abs(mx)) { x0 = null; return; }
       if (Math.abs(mx) < 10) return;
@@ -407,6 +456,7 @@ function enableSwipe(li, row, { onRight, onLeft }) {
     li.classList.toggle('sw-armed', Math.abs(dx) > THRESHOLD);
   });
   row.addEventListener('pointerup', () => {
+    cancelPress();
     if (x0 == null || !dragging) { x0 = null; return; }
     swallowClick();
     const action = dx > THRESHOLD ? onRight : dx < -THRESHOLD ? onLeft : null;
@@ -507,7 +557,9 @@ function taskItem(t, { showDate = true } = {}) {
   enableSwipe(li, row, {
     onRight: t.done ? () => restore(120) : () => complete(120),
     onLeft: t.done ? null : () => moveOut(left.due, 120),
+    onLongPress: () => openPeek(t.id, row),
   });
+  li.dataset.id = t.id;
   return li;
 }
 
@@ -840,22 +892,29 @@ function refreshExportStatus() {
 
 const closeTimers = new WeakMap();
 
+// 開閉はどちらも CSS の transition で動かす。途中の位置からでも自然につながる
+const SHEET_CLOSE_MS = 340;
+
 function openSheet(el) {
   clearTimeout(closeTimers.get(el));
   el.classList.remove('closing');
   el.hidden = false;
+  void el.offsetWidth; // 閉じた位置を一度描いてから開く
+  el.classList.add('open');
+  document.body.classList.add('sheet-open');
 }
 function closeSheet(el) {
-  if (el.hidden) return;
-  if (reduceMotion()) {
-    el.hidden = true;
-    return;
-  }
+  if (el.hidden || el.classList.contains('closing')) return;
+  el.classList.remove('open');
   el.classList.add('closing');
   closeTimers.set(el, setTimeout(() => {
     el.hidden = true;
     el.classList.remove('closing');
-  }, 200));
+    const sheet = el.querySelector('.sheet');
+    if (sheet) sheet.style.transform = '';
+    el.style.removeProperty('--dim');
+    if (!document.querySelector('.backdrop.open')) document.body.classList.remove('sheet-open');
+  }, reduceMotion() ? 0 : SHEET_CLOSE_MS));
 }
 
 // シートを下にスワイプして閉じる。中身が上までスクロールされているときだけ反応する
@@ -865,12 +924,6 @@ function enableSheetDrag(backdrop) {
   let t0 = 0;
   let dy = 0;
   let dragging = false;
-
-  const resetStyles = () => {
-    sheet.style.transition = '';
-    sheet.style.transform = '';
-    backdrop.style.backgroundColor = '';
-  };
 
   sheet.addEventListener('touchstart', (e) => {
     y0 = null;
@@ -889,12 +942,12 @@ function enableSheetDrag(backdrop) {
       if (d < -6) y0 = null; // 上方向はふつうのスクロールに任せる
       if (d < 6) return;
       dragging = true;
-      sheet.classList.add('dragging');
+      backdrop.classList.add('dragging');
     }
     e.preventDefault();
     dy = Math.max(0, d);
     sheet.style.transform = `translateY(${dy}px)`;
-    backdrop.style.backgroundColor = `rgba(0, 0, 0, ${(0.35 * Math.max(0, 1 - dy / sheet.offsetHeight)).toFixed(3)})`;
+    backdrop.style.setProperty('--dim', Math.max(0, 1 - dy / sheet.offsetHeight).toFixed(3));
   }, { passive: false });
 
   const end = () => {
@@ -902,29 +955,162 @@ function enableSheetDrag(backdrop) {
     y0 = null;
     if (!dragging) return;
     dragging = false;
-    sheet.classList.remove('dragging');
+    // 指を離した位置から、開閉と同じ動きでつなげる
+    backdrop.classList.remove('dragging');
+    sheet.style.transform = '';
+    backdrop.style.removeProperty('--dim');
     const fast = dy / Math.max(1, Date.now() - t0) > 0.5;
-    if (dy > 120 || (fast && dy > 30)) {
-      // 指を離した位置から下へ流して閉じる
-      sheet.style.transition = 'transform .2s ease-in';
-      sheet.style.transform = 'translateY(100%)';
-      backdrop.style.transition = 'background-color .2s';
-      backdrop.style.backgroundColor = 'rgba(0, 0, 0, 0)';
-      closeTimers.set(backdrop, setTimeout(() => {
-        backdrop.hidden = true;
-        backdrop.style.transition = '';
-        resetStyles();
-      }, 200));
-    } else {
-      sheet.style.transition = 'transform .25s cubic-bezier(.2, .9, .25, 1)';
-      sheet.style.transform = '';
-      backdrop.style.backgroundColor = '';
-      setTimeout(resetStyles, 260);
-    }
+    if (dy > 120 || (fast && dy > 30)) closeSheet(backdrop);
   };
   sheet.addEventListener('touchend', end);
   sheet.addEventListener('touchcancel', end);
 }
+
+/* ---------- 長押しの詳細 ---------- */
+
+// iOS の動きに近い、出だしが速くて最後にゆっくり止まる曲線
+const EASE = 'cubic-bezier(.32, .72, 0, 1)';
+const ICONS = {
+  check: '<path d="m5 12 5 5 9-10"/>',
+  move: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  edit: '<path d="M4 20h4L19 9l-4-4L4 16v4z"/>',
+  undo: '<path d="M9 7 4 12l5 5M4 12h11a5 5 0 0 1 0 10h-2"/>',
+  trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+};
+let peekState = null;
+
+function rowOf(id) {
+  return document.querySelector(`#list .task[data-id="${CSS.escape(id)}"] .row`);
+}
+
+// 行の位置・大きさに見えるよう、カードを縮めて重ねる変形
+function transformFromRow(rowRect, cardRect) {
+  const s = rowRect.width / cardRect.width;
+  const dx = rowRect.left - cardRect.left;
+  const dy = rowRect.top + rowRect.height / 2 - (cardRect.top + (cardRect.height * s) / 2);
+  return `translate(${dx}px, ${dy}px) scale(${s})`;
+}
+
+function peekAction(label, icon, run, cls = '') {
+  const btn = h('button', { type: 'button', class: `peek-act ${cls}` }, h('span', {}, label));
+  const ico = h('span', { class: 'peek-ico', 'aria-hidden': 'true' });
+  ico.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[icon]}</svg>`;
+  btn.append(ico);
+  btn.addEventListener('click', () => {
+    if (peekJustOpened()) return;
+    closePeek().then(run);
+  });
+  return btn;
+}
+
+// 長押しの指を離したときのタップで、開いた直後のボタンが押されないようにする
+function peekJustOpened() {
+  return !!peekState && Date.now() - peekState.at < 400;
+}
+
+function openPeek(id, sourceRow) {
+  const t = findTask(id);
+  if (!t || peekState) return;
+  const td = today();
+  const over = isOverdue(t);
+  const overDays = over ? diffDays(td, t.due) : 0;
+  const when = $('#peekWhen');
+  when.textContent = t.done ? '完了済み'
+    : !t.due ? 'やりたいこと'
+      : over ? `期限切れ · ${overDays > 0 ? `${overDays}日超過` : '時刻を過ぎています'}`
+        : dueLabel(t);
+  when.classList.toggle('over', over);
+  $('#peekTitle').textContent = t.title;
+  $('#peekNote').textContent = t.note || '';
+  $('#peekNote').hidden = !t.note;
+  const stamp = (ms) => {
+    const d = new Date(ms);
+    return `${fmtMD(ymd(d))} ${d.getHours()}:${pad(d.getMinutes())}`;
+  };
+  const info = [
+    ['期限', t.due ? `${fmtMD(t.due)}${t.time ? ` ${t.time}` : ''}` : 'なし'],
+    ['くり返し', t.repeat && t.repeat !== 'none' ? REPEAT_LABEL[t.repeat] : 'なし'],
+    ['重要', t.star ? '★ 重要' : '—'],
+    ['作成', t.createdAt ? stamp(t.createdAt) : '—'],
+  ];
+  if (t.done && t.doneAt) info.push(['完了', stamp(t.doneAt)]);
+  $('#peekInfo').replaceChildren(...info.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
+
+  const li = () => rowOf(id)?.parentElement;
+  const left = swipeLeftAction(t);
+  const actions = t.done
+    ? [peekAction('未完了に戻す', 'undo', () => uncompleteTask(id))]
+    : [
+      peekAction('完了にする', 'check', () => {
+        const el = li();
+        el?.classList.add('completing');
+        return (el ? animateOut(el) : Promise.resolve()).then(() => completeTask(id));
+      }),
+      peekAction(left.label, 'move', () => {
+        const el = li();
+        return (el ? animateOut(el) : Promise.resolve()).then(() => moveTasks([id], left.due));
+      }),
+    ];
+  actions.push(
+    peekAction('編集する', 'edit', () => openEditor(id)),
+    peekAction('削除', 'trash', () => {
+      const el = li();
+      return (el ? animateOut(el) : Promise.resolve()).then(() => deleteTask(id));
+    }, 'danger'),
+  );
+  $('#peekActions').replaceChildren(...actions);
+
+  const peek = $('#peek');
+  peek.hidden = false;
+  void peek.offsetWidth;
+  peek.classList.add('open');
+  peekState = { id, at: Date.now() };
+  sourceRow?.parentElement.classList.add('peeking');
+
+  if (reduceMotion() || !sourceRow) return;
+  const card = peek.querySelector('.peek-card');
+  card.animate(
+    [{ transform: transformFromRow(sourceRow.getBoundingClientRect(), card.getBoundingClientRect()), opacity: 0.5 },
+      { transform: 'none', opacity: 1 }],
+    { duration: 480, easing: EASE },
+  );
+  $('#peekActions').animate(
+    [{ opacity: 0, transform: 'translateY(-10px) scale(.96)' }, { opacity: 1, transform: 'none' }],
+    { duration: 420, delay: 90, easing: EASE, fill: 'backwards' },
+  );
+}
+
+// 閉じ終わったら resolve する（続けて行う操作のアニメーションと重ならないように）
+function closePeek() {
+  if (!peekState) return Promise.resolve();
+  const { id } = peekState;
+  peekState = null;
+  const peek = $('#peek');
+  const card = peek.querySelector('.peek-card');
+  const row = rowOf(id);
+  peek.classList.remove('open');
+  const finish = () => {
+    peek.hidden = true;
+    row?.parentElement.classList.remove('peeking');
+  };
+  if (reduceMotion() || !card.animate) {
+    finish();
+    return Promise.resolve();
+  }
+  $('#peekActions').animate([{ opacity: 1 }, { opacity: 0, transform: 'scale(.96)' }], { duration: 160, easing: 'ease-out', fill: 'forwards' });
+  const to = row ? transformFromRow(row.getBoundingClientRect(), card.getBoundingClientRect()) : 'scale(.92)';
+  const anim = card.animate([{ transform: 'none', opacity: 1 }, { transform: to, opacity: row ? 0.6 : 0 }], { duration: 340, easing: EASE, fill: 'forwards' });
+  const done = Promise.race([anim.finished.catch(() => {}), new Promise((r) => setTimeout(r, 420))]);
+  return done.then(() => {
+    finish();
+    card.getAnimations().forEach((a) => a.cancel());
+    $('#peekActions').getAnimations().forEach((a) => a.cancel());
+  });
+}
+
+$('#peek').addEventListener('click', (e) => {
+  if (e.target.closest('[data-close-peek]') && !peekJustOpened()) closePeek();
+});
 
 // 期限の日付ボタン（今日から 6 日分。選んだ日がその外なら先頭に出す）
 function renderDayPills() {
@@ -946,7 +1132,7 @@ function renderDayPills() {
       'aria-label': fmtMD(d),
       onclick: () => {
         $('#fDue').value = d;
-        syncDue();
+        rememberManualDue();
       },
     },
     h('span', { class: 'day-dow' }, d === td ? '今日' : WEEK[dt.getDay()]),
@@ -967,6 +1153,28 @@ function syncDue() {
   note.textContent = !due ? '期限なし（やりたいこと）'
     : past ? `${diffDays(today(), due)}日過ぎています`
       : dueLabel({ due, time: time || null });
+}
+
+// 期限を手で選んだ値。タイトルから日付が消えたときはこの値に戻す
+let editorBase = { due: '', time: '' };
+let titleTouched = false;
+
+function rememberManualDue() {
+  editorBase = { due: $('#fDue').value, time: $('#fTime').value };
+  syncDue();
+}
+
+// タイトルに「11/16」「明日 15時」などがあれば、期限に反映する
+function syncTitleDate() {
+  titleTouched = true;
+  const p = parseQuick($('#fTitle').value);
+  const found = p.due !== undefined || p.time !== undefined;
+  $('#fDue').value = p.due !== undefined ? p.due : (p.time && !editorBase.due ? today() : editorBase.due);
+  $('#fTime').value = p.time !== undefined ? p.time : editorBase.time;
+  if (p.star) $('#fStar').checked = true;
+  syncDue();
+  const due = $('#fDue').value;
+  $('#titleHint').textContent = found && due ? `期限を ${dueLabel({ due, time: $('#fTime').value || null })} にします` : '';
 }
 
 function syncRepeat() {
@@ -990,6 +1198,9 @@ function openEditor(id, preset = {}) {
   $('#fRepeat').value = t.repeat || 'none';
   $('#fStar').checked = !!t.star;
   $('#deleteBtn').hidden = !id;
+  editorBase = { due: $('#fDue').value, time: $('#fTime').value };
+  titleTouched = false;
+  $('#titleHint').textContent = '';
   syncDue();
   syncRepeat();
   openSheet($('#editor'));
@@ -998,7 +1209,9 @@ function openEditor(id, preset = {}) {
 
 function saveEditor(e) {
   e.preventDefault();
-  const title = $('#fTitle').value.trim();
+  // 日付として読み取った部分はタイトルから外す（タイトルを書き換えたときだけ）
+  const raw = $('#fTitle').value.trim();
+  const title = titleTouched ? parseQuick(raw).title : raw;
   if (!title) {
     $('#fTitle').focus();
     return;
@@ -1118,8 +1331,46 @@ function updateHint() {
   $('#hint').textContent = `→ ${where}${r.star ? ' · ★' : ''} に追加`;
 }
 
-function showQuickChips(show) {
-  $('#quickChips').hidden = !show;
+/* ---------- 追加用の入力欄 ---------- */
+
+// キーボードの高さだけ入力欄を持ち上げる（iOS はキーボードで画面が縮まないため）
+function syncKeyboardInset() {
+  const vv = window.visualViewport;
+  const kb = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+  $('#composer').style.setProperty('--kb', `${Math.round(kb)}px`);
+  $('#composer').classList.toggle('kb', kb > 40);
+}
+
+function openComposer() {
+  const el = $('#composer');
+  clearTimeout(closeTimers.get(el));
+  el.classList.remove('closing');
+  el.hidden = false;
+  syncKeyboardInset();
+  // iOS ではタップの処理の中で focus しないとキーボードが出ない
+  $('#quickInput').focus();
+  void el.offsetWidth;
+  el.classList.add('open');
+  document.body.classList.add('composing');
+  updateHint();
+}
+
+function closeComposer() {
+  const el = $('#composer');
+  if (el.hidden || el.classList.contains('closing')) return;
+  $('#quickInput').blur();
+  el.classList.remove('open');
+  el.classList.add('closing');
+  document.body.classList.remove('composing');
+  closeTimers.set(el, setTimeout(() => {
+    el.hidden = true;
+    el.classList.remove('closing');
+    // 何も入力せずに閉じたら、選んでいた期限も元に戻す
+    if (!$('#quickInput').value.trim()) {
+      quickDue = undefined;
+      quickStar = false;
+    }
+  }, reduceMotion() ? 0 : SHEET_CLOSE_MS));
 }
 
 function quickAdd() {
@@ -1134,14 +1385,14 @@ $('#quickForm').addEventListener('submit', (e) => {
   quickAdd();
 });
 $('#quickInput').addEventListener('input', updateHint);
-$('#quickInput').addEventListener('focus', () => showQuickChips(true));
-$('#quickInput').addEventListener('blur', () => {
-  if ($('#quickInput').value.trim()) return;
-  // 何も入力せずに閉じたら、選んでいた期限も元に戻す
-  showQuickChips(false);
-  quickDue = undefined;
-  quickStar = false;
+$('#fab').addEventListener('click', openComposer);
+$('#composer').addEventListener('click', (e) => {
+  if (e.target.closest('[data-close-composer]')) closeComposer();
 });
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', syncKeyboardInset);
+  window.visualViewport.addEventListener('scroll', syncKeyboardInset);
+}
 // ボタンを押してもキーボードが閉じないように、フォーカスを奪わせない
 $('#quickChips').addEventListener('pointerdown', (e) => e.preventDefault());
 $('#quickChips').addEventListener('click', (e) => {
@@ -1157,23 +1408,21 @@ $('#quickChips').addEventListener('click', (e) => {
 });
 function openDetailEditor() {
   const text = $('#quickInput').value;
-  openEditor(null, text.trim() ? resolveQuick(text) : { due: quickDue !== undefined ? quickDue : today(), star: quickStar });
+  const preset = text.trim() ? resolveQuick(text) : { due: quickDue !== undefined ? quickDue : today(), star: quickStar };
+  closeComposer();
+  openEditor(null, preset);
 }
-// ＋ボタン：文字があればそのまま追加、空なら詳しく入力する画面を開く
-$('#detailBtn').addEventListener('click', () => {
-  if ($('#quickInput').value.trim()) quickAdd();
-  else openDetailEditor();
-});
 
 $('#editForm').addEventListener('submit', saveEditor);
-$('#fDue').addEventListener('input', syncDue);
-$('#fDue').addEventListener('change', syncDue);
-$('#fTime').addEventListener('input', syncDue);
-$('#fTime').addEventListener('change', syncDue);
+$('#fTitle').addEventListener('input', syncTitleDate);
+$('#fDue').addEventListener('input', rememberManualDue);
+$('#fDue').addEventListener('change', rememberManualDue);
+$('#fTime').addEventListener('input', rememberManualDue);
+$('#fTime').addEventListener('change', rememberManualDue);
 $('#noDueBtn').addEventListener('click', () => {
   $('#fDue').value = '';
   $('#fTime').value = '';
-  syncDue();
+  rememberManualDue();
 });
 $('#repeatSeg').addEventListener('click', (e) => {
   const b = e.target.closest('button');

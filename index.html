@@ -43,24 +43,49 @@
 
   <div class="counts" id="counts"></div>
 
-  <form id="quickForm" class="quick" autocomplete="off">
-    <input id="quickInput" type="text" enterkeyhint="done" aria-label="タスクを追加" placeholder="やることを追加…">
-    <button type="button" id="detailBtn" class="add-btn" aria-label="追加">
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-    </button>
-  </form>
-  <div id="quickChips" class="quick-chips" hidden>
-    <button type="button" class="chip" data-due="today">今日</button>
-    <button type="button" class="chip" data-due="tomorrow">明日</button>
-    <button type="button" class="chip" data-due="weekend">週末</button>
-    <button type="button" class="chip" data-due="nextweek">来週</button>
-    <button type="button" class="chip" data-due="none">期限なし</button>
-    <button type="button" class="chip star-chip" data-star>★ 重要</button>
-    <button type="button" class="chip" data-detail>詳しく…</button>
-  </div>
-  <div id="hint" class="hint"></div>
-
   <main id="list"></main>
+</div>
+
+<!-- 画面下中央の追加ボタン -->
+<button type="button" id="fab" class="fab" aria-label="タスクを追加">
+  <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+</button>
+
+<!-- 追加用の入力欄（キーボードのすぐ上に出る） -->
+<div id="composer" class="composer" hidden>
+  <div class="composer-scrim" data-close-composer></div>
+  <form id="quickForm" class="composer-card" autocomplete="off">
+    <div id="hint" class="hint"></div>
+    <div id="quickChips" class="quick-chips">
+      <button type="button" class="chip" data-due="today">今日</button>
+      <button type="button" class="chip" data-due="tomorrow">明日</button>
+      <button type="button" class="chip" data-due="weekend">週末</button>
+      <button type="button" class="chip" data-due="nextweek">来週</button>
+      <button type="button" class="chip" data-due="none">期限なし</button>
+      <button type="button" class="chip star-chip" data-star>★ 重要</button>
+      <button type="button" class="chip" data-detail>詳しく…</button>
+    </div>
+    <div class="composer-row">
+      <input id="quickInput" type="text" enterkeyhint="send" aria-label="タスクを追加" placeholder="やることを追加（例: 歯医者 11/16 15時）">
+      <button type="submit" class="send-btn" aria-label="追加">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+      </button>
+    </div>
+  </form>
+</div>
+
+<!-- 長押しで出るタスクの詳細 -->
+<div id="peek" class="peek" hidden>
+  <div class="peek-scrim" data-close-peek></div>
+  <div class="peek-stack">
+    <div class="peek-card" role="dialog" aria-modal="true" aria-labelledby="peekTitle">
+      <div class="peek-when" id="peekWhen"></div>
+      <h2 class="peek-title" id="peekTitle"></h2>
+      <p class="peek-note" id="peekNote"></p>
+      <dl class="peek-info" id="peekInfo"></dl>
+    </div>
+    <div class="peek-actions" id="peekActions"></div>
+  </div>
 </div>
 
 <!-- タスク編集シート -->
@@ -73,7 +98,8 @@
       <button type="submit" class="save-btn">保存</button>
     </div>
 
-    <input type="text" id="fTitle" class="title-input" placeholder="やること" aria-label="やること" enterkeyhint="done">
+    <input type="text" id="fTitle" class="title-input" placeholder="やること（例: 歯医者 11/16）" aria-label="やること" enterkeyhint="done">
+    <div class="title-hint" id="titleHint"></div>
 
     <div class="field">
       <div class="field-head"><span>期限</span><span class="due-note" id="dueNote"></span></div>
