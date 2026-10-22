@@ -470,6 +470,76 @@ ul.tasks {
 .toast button { color: #9db4ff; font-weight: 700; padding: 4px 6px; flex: none; }
 .toast button[hidden] { display: none; }
 
+/* 記録タブ */
+.quick[hidden] { display: none; }
+.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.stat {
+  text-align: left;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.stat-label { font-size: 13px; color: var(--muted); }
+.stat-value { margin-top: 2px; font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.stat-value small { font-size: 14px; font-weight: 600; margin-left: 2px; color: var(--muted); }
+.stat-sub { margin-top: 2px; font-size: 12px; color: var(--muted); }
+.stat.danger { border-color: var(--danger); background: var(--danger-weak); }
+.stat.danger .stat-label, .stat.danger .stat-value, .stat.danger .stat-sub { color: var(--danger); }
+
+.chart {
+  margin-top: 12px;
+  padding: 14px 12px 10px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.chart-head { display: flex; align-items: baseline; justify-content: space-between; margin: 0 4px 8px; }
+.chart-head h2 { margin: 0; font-size: 14px; font-weight: 600; color: var(--muted); }
+.chart-value { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.bars { display: grid; grid-template-columns: repeat(14, 1fr); align-items: end; border-bottom: 1px solid var(--line); }
+.col { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 0 0 6px; min-width: 0; }
+.col:active { transform: none; }
+.col-n { height: 14px; font-size: 11px; font-weight: 700; color: var(--text); visibility: hidden; font-variant-numeric: tabular-nums; }
+.col.sel .col-n { visibility: visible; }
+.col-track { height: 96px; width: 100%; display: flex; align-items: flex-end; justify-content: center; }
+.col-bar {
+  width: min(60%, 16px);
+  height: var(--h);
+  border-radius: 4px 4px 0 0;
+  background: var(--accent);
+  opacity: .55;
+  transform-origin: bottom;
+  transition: opacity .15s;
+}
+.col.sel .col-bar { opacity: 1; }
+.col-day { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.col-day.sun { color: var(--danger); }
+.col.is-today .col-day { color: var(--accent); font-weight: 700; }
+
+.tag { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; }
+.tag.late { color: var(--danger); background: var(--danger-weak); }
+.tag.ontime { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+
+/* 今日タブの「今日完了したタスク」 */
+.done-fold { margin-top: 18px; }
+.done-fold summary {
+  list-style: none;
+  cursor: pointer;
+  margin: 0 4px 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.done-fold summary::-webkit-details-marker { display: none; }
+.done-fold summary::before { content: "›"; font-size: 18px; line-height: 1; transition: transform .2s; }
+.done-fold[open] summary::before { transform: rotate(90deg); }
+.done-fold .section-count { margin-left: 0; }
+.done-fold[open] ul { animation: fade-up .25s ease-out; }
+
 /* ===== アニメーション ===== */
 
 /* 押したときの手応え */
@@ -551,6 +621,10 @@ button:active { transform: scale(.94); }
 .toast.leaving { animation: toast-out .18s ease-in forwards; }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 16px) scale(.96); } }
 @keyframes toast-out { to { opacity: 0; transform: translate(-50%, 8px); } }
+
+/* 記録のバーが伸びる */
+.view-enter .col-bar { animation: grow .5s cubic-bezier(.2, .8, .2, 1) both; animation-delay: calc(var(--i, 0) * 25ms + 120ms); }
+@keyframes grow { from { transform: scaleY(0); } }
 
 /* 2 週間カレンダー */
 .day { transition: transform .12s ease, background-color .2s; }

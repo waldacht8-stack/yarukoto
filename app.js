@@ -180,15 +180,18 @@ function completeTask(id) {
   const t = findTask(id);
   if (!t) return;
   const snap = JSON.stringify(tasks);
+  // 期日内に終えたかを記録しておく（期限なしは対象外）
+  const late = t.due ? isOverdue(t) : null;
   if (t.repeat && t.repeat !== 'none') {
     // 完了履歴を残しつつ、本体は次回の期限へ
-    tasks.push({ ...t, id: uid(), repeat: 'none', done: true, doneAt: Date.now() });
+    tasks.push({ ...t, id: uid(), repeat: 'none', done: true, doneAt: Date.now(), late });
     t.due = nextDue(t);
     commit(`完了！ 次回は ${fmtMD(t.due)}`, snap);
   } else {
     t.done = true;
     t.doneAt = Date.now();
-    commit('完了しました', snap);
+    t.late = late;
+    commit(late ? '完了しました（遅れて完了）' : '完了しました', snap);
   }
 }
 
@@ -197,6 +200,7 @@ function uncompleteTask(id) {
   if (!t) return;
   t.done = false;
   t.doneAt = null;
+  delete t.late;
   commit('未完了に戻しました');
 }
 
@@ -420,7 +424,11 @@ function enableSwipe(li, row, { onRight, onLeft }) {
 function taskItem(t) {
   const over = isOverdue(t);
   const meta = [];
-  if (t.due) {
+  if (t.done) {
+    if (t.late === true) meta.push(h('span', { class: 'tag late' }, '遅れて完了'));
+    if (t.late === false) meta.push(h('span', { class: 'tag ontime' }, '期日内'));
+    if (t.due) meta.push(h('span', { class: 'due' }, `期限 ${fmtMD(t.due)}`));
+  } else if (t.due) {
     const cls = over ? 'due over' : t.due === today() ? 'due today' : 'due';
     meta.push(h('span', { class: cls }, dueLabel(t)));
   }
@@ -566,6 +574,90 @@ function weekStrip() {
   return h('div', { class: 'week' }, days);
 }
 
+function dayKey(ts) { return ymd(new Date(ts)); }
+
+// 今日完了したタスク（今日タブの一番下に折りたたんで置く）
+let doneFoldOpen = false;
+function doneFold() {
+  const td = today();
+  const list = tasks.filter((t) => t.done && t.doneAt && dayKey(t.doneAt) === td)
+    .sort((a, b) => b.doneAt - a.doneAt);
+  if (!list.length) return null;
+  const el = h('details', { class: 'done-fold', open: doneFoldOpen },
+    h('summary', {}, '今日完了したタスク', h('span', { class: 'section-count' }, list.length)),
+    h('ul', { class: 'tasks' }, list.map(taskItem)),
+  );
+  el.addEventListener('toggle', () => { doneFoldOpen = el.open; });
+  return el;
+}
+
+function logStats() {
+  const td = today();
+  const done = tasks.filter((t) => t.done && t.doneAt);
+  const perDay = new Map();
+  for (const t of done) {
+    const k = dayKey(t.doneAt);
+    perDay.set(k, (perDay.get(k) || 0) + 1);
+  }
+  const week = done.filter((t) => dayKey(t.doneAt) >= addDays(td, -6)).length;
+  const judged = done.filter((t) => dayKey(t.doneAt) >= addDays(td, -29) && typeof t.late === 'boolean');
+  const onTime = judged.length
+    ? Math.round((judged.filter((t) => !t.late).length / judged.length) * 100)
+    : null;
+  // 今日まだ完了がなくても、昨日まで続いていれば連続として数える
+  let streak = 0;
+  let d = perDay.has(td) ? td : addDays(td, -1);
+  while (perDay.has(d)) {
+    streak++;
+    d = addDays(d, -1);
+  }
+  return { perDay, week, onTime, judged: judged.length, streak, overdue: activeTasks().filter(isOverdue).length };
+}
+
+function statTile(label, value, unit, sub, { cls = '', onclick = null } = {}) {
+  return h(onclick ? 'button' : 'div', { type: onclick ? 'button' : null, class: `stat ${cls}`, onclick },
+    h('div', { class: 'stat-label' }, label),
+    h('div', { class: 'stat-value' }, value, unit ? h('small', {}, unit) : null),
+    h('div', { class: 'stat-sub' }, sub),
+  );
+}
+
+// 直近 14 日の完了数。バーをタップするとその日の件数を表示する
+function doneChart(perDay) {
+  const td = today();
+  const days = [];
+  for (let i = 13; i >= 0; i--) {
+    const d = addDays(td, -i);
+    days.push({ d, n: perDay.get(d) || 0 });
+  }
+  const max = Math.max(1, ...days.map((x) => x.n));
+  const caption = h('span', { class: 'chart-value' });
+  const bars = [];
+  const select = (idx) => {
+    const { d, n } = days[idx];
+    caption.textContent = `${d === td ? '今日' : fmtMD(d)}  ${n}件`;
+    bars.forEach((b, i) => b.classList.toggle('sel', i === idx));
+  };
+  days.forEach(({ d, n }, i) => {
+    const dow = parseYmd(d).getDay();
+    bars.push(h('button', {
+      type: 'button',
+      class: `col${d === td ? ' is-today' : ''}`,
+      style: `--h:${(n / max) * 100}%; --i:${i}`,
+      'aria-label': `${fmtMD(d)} ${n}件`,
+      onclick: () => select(i),
+    },
+    h('span', { class: 'col-n' }, n || ''),
+    h('span', { class: 'col-track' }, h('span', { class: 'col-bar' })),
+    h('span', { class: `col-day${dow === 0 ? ' sun' : ''}` }, d === td ? '今日' : parseYmd(d).getDate())));
+  });
+  select(days.length - 1);
+  return h('section', { class: 'chart' },
+    h('div', { class: 'chart-head' }, h('h2', {}, '完了数（14日）'), caption),
+    h('div', { class: 'bars' }, bars),
+  );
+}
+
 function swipeTip() {
   if (safeGet(SWIPE_TIP_KEY) || !activeTasks().length) return null;
   const el = h('div', { class: 'tip' },
@@ -616,7 +708,7 @@ const VIEWS = {
         const some = activeTasks().filter((t) => !t.due).length;
         out.push(empty('今日のタスクはすべて完了 🎉', some ? `「やりたい」に ${some} 件あります。余裕があれば手をつけてみましょう。` : '上の欄から追加できます。'));
       }
-      out.push(swipeTip());
+      out.push(doneFold(), swipeTip());
       return out;
     },
   },
@@ -649,17 +741,41 @@ const VIEWS = {
       return [section(`${list.length} 件`, list, { count: false })];
     },
   },
-  done: {
-    title: '完了',
-    placeholder: '今日やること',
+  log: {
+    title: '記録',
+    placeholder: '',
     build() {
-      const list = tasks.filter((t) => t.done).sort((a, b) => b.doneAt - a.doneAt).slice(0, 300);
-      if (!list.length) return [empty('まだ完了したタスクはありません', '')];
-      const todayDone = list.filter((t) => ymd(new Date(t.doneAt)) === today()).length;
-      return [section(`今日 ${todayDone} 件完了`, list, {
-        count: false,
-        action: h('button', { type: 'button', class: 'text-btn', onclick: clearDone }, '履歴を削除'),
-      })];
+      const s = logStats();
+      const out = [
+        h('div', { class: 'stats' },
+          statTile('期日内に完了', s.onTime ?? '—', s.onTime == null ? '' : '%',
+            s.judged ? `直近30日 · ${s.judged}件中` : '期限つきの完了がまだありません'),
+          statTile('今週の完了', s.week, '件', '直近7日'),
+          statTile('連続', s.streak, '日', '毎日1件以上完了'),
+          statTile('期限切れ', s.overdue, '件', s.overdue ? 'タップで今日へ' : 'ありません',
+            s.overdue ? { cls: 'danger', onclick: () => setView('today') } : {}),
+        ),
+        doneChart(s.perDay),
+      ];
+      const list = tasks.filter((t) => t.done).sort((a, b) => b.doneAt - a.doneAt).slice(0, 200);
+      if (!list.length) {
+        out.push(empty('まだ完了したタスクはありません', 'タスクを完了すると、ここに記録されます。'));
+        return out;
+      }
+      const groups = new Map();
+      for (const t of list) {
+        const k = dayKey(t.doneAt);
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k).push(t);
+      }
+      [...groups].forEach(([day, items], i) => {
+        const diff = diffDays(day, today());
+        const label = diff === 0 ? '今日' : diff === -1 ? '昨日' : fmtMD(day);
+        out.push(section(label, items, {
+          action: i === 0 ? h('button', { type: 'button', class: 'text-btn', onclick: clearDone }, '履歴を削除') : null,
+        }));
+      });
+      return out;
     },
   },
 };
@@ -694,6 +810,9 @@ function render({ enter = false } = {}) {
   $('#todayLabel').textContent = fmtLong(today());
   $('#viewTitle').textContent = VIEWS[view].title;
   $('#quickInput').placeholder = VIEWS[view].placeholder;
+  // 記録タブでは追加しないので入力欄を隠す
+  $('#quickForm').hidden = view === 'log';
+  if (view === 'log') showQuickChips(false);
   document.querySelectorAll('.tabs button').forEach((b) => {
     b.classList.toggle('active', b.dataset.view === view);
   });
