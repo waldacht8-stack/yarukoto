@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '9';
+const APP_VERSION = '10';
 const STORE_KEY = 'yarukoto.tasks.v1';
 const THEME_KEY = 'yarukoto.theme';
 const BADGE_KEY = 'yarukoto.badge';
@@ -604,8 +604,12 @@ function renderCounts(over, todays, done) {
     const from = lastCounts ? lastCounts[key] : n;
     const num = h('span', { class: 'count-num' }, from);
     if (from !== n) countUp(num, from, n);
-    return h('div', { class: `count-tile ${key}${n ? '' : ' zero'}` },
-      h('span', { class: 'count-label' }, label), num);
+    return h('button', {
+      type: 'button',
+      class: `count-tile ${key}${n ? '' : ' zero'}`,
+      'aria-label': `${label} ${n}件の一覧`,
+      onclick: () => openCountSheet(key),
+    }, h('span', { class: 'count-label' }, label), num);
   };
   el.replaceChildren(tile('over', '期限切れ'), tile('today', '今日'), tile('done', '完了'));
 
@@ -623,6 +627,52 @@ function renderCounts(over, todays, done) {
 }
 
 function dayKey(ts) { return ymd(new Date(ts)); }
+
+/* ---------- 件数を押したときの一覧 ---------- */
+
+const COUNT_TITLES = { over: '期限切れ', today: '今日', done: '今日完了' };
+const COUNT_EMPTY = {
+  over: ['期限切れはありません', 'この調子です。'],
+  today: ['今日のタスクはありません', '下の ＋ から追加できます。'],
+  done: ['今日はまだ完了がありません', 'ひとつ片づけてみましょう。'],
+};
+let countSheetKey = null;
+
+function countTasks(key) {
+  if (key === 'over') return activeTasks().filter(isOverdue).sort(cmpTask);
+  if (key === 'today') return activeTasks().filter(isDueToday).sort(cmpTask);
+  const td = today();
+  return tasks.filter((t) => t.done && t.doneAt && dayKey(t.doneAt) === td).sort((a, b) => b.doneAt - a.doneAt);
+}
+
+function renderCountSheet() {
+  const key = countSheetKey;
+  if (!key) return;
+  const list = countTasks(key);
+  $('#countTitle').textContent = `${COUNT_TITLES[key]} ${list.length}件`;
+  if (!list.length) {
+    $('#countBody').replaceChildren(empty(...COUNT_EMPTY[key]));
+    return;
+  }
+  const items = list.map((t, i) => {
+    const li = taskItem(t, { showDate: i === 0 || list[i - 1].due !== t.due });
+    li.style.setProperty('--i', i);
+    return li;
+  });
+  const parts = [h('div', { class: 'count-list' }, h('ul', { class: 'tasks' }, items))];
+  if (key === 'over' && list.length > 1) {
+    parts.unshift(h('div', { class: 'count-actions' },
+      h('button', { type: 'button', class: 'text-btn danger-text', onclick: () => moveTasks(list.map((t) => t.id), today()) }, 'すべて今日へ')));
+  }
+  $('#countBody').replaceChildren(...parts);
+}
+
+function openCountSheet(key) {
+  countSheetKey = key;
+  renderCountSheet();
+  openSheet($('#countSheet'));
+  playEnter($('#countBody'));
+}
 
 function logStats() {
   const td = today();
@@ -776,7 +826,7 @@ function buildLog() {
           cls: 'danger',
           onclick: () => {
             closeSheet($('#logSheet'));
-            window.scrollTo({ top: 0, behavior: reduceMotion() ? 'auto' : 'smooth' });
+            $('#list').scrollTo({ top: 0, behavior: reduceMotion() ? 'auto' : 'smooth' });
           },
         } : {}),
     ),
@@ -825,6 +875,7 @@ function render({ enter = false } = {}) {
   $('#todayDow').textContent = `${WEEK[now.getDay()]}曜日`;
   list.replaceChildren(...buildList().filter(Boolean));
   if (!$('#logSheet').hidden) renderLog();
+  if (!$('#countSheet').hidden) renderCountSheet();
   fx.clear();
   updateHint();
 }
@@ -1036,7 +1087,9 @@ function openPeek(id, sourceRow) {
   if (t.done && t.doneAt) info.push(['完了', stamp(t.doneAt)]);
   $('#peekInfo').replaceChildren(...info.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
 
-  const li = () => rowOf(id)?.parentElement;
+  // 長押しした行（一覧でも件数のシートでも）。消えていたら一覧の行を探す
+  const srcLi = sourceRow?.parentElement || null;
+  const li = () => (srcLi && srcLi.isConnected ? srcLi : rowOf(id)?.parentElement);
   const left = swipeLeftAction(t);
   const actions = t.done
     ? [peekAction('未完了に戻す', 'undo', () => uncompleteTask(id))]
@@ -1064,8 +1117,8 @@ function openPeek(id, sourceRow) {
   peek.hidden = false;
   void peek.offsetWidth;
   peek.classList.add('open');
-  peekState = { id, at: Date.now() };
-  sourceRow?.parentElement.classList.add('peeking');
+  peekState = { id, at: Date.now(), srcLi };
+  srcLi?.classList.add('peeking');
 
   if (reduceMotion() || !sourceRow) return;
   const card = peek.querySelector('.peek-card');
@@ -1083,14 +1136,15 @@ function openPeek(id, sourceRow) {
 // 閉じ終わったら resolve する（続けて行う操作のアニメーションと重ならないように）
 function closePeek() {
   if (!peekState) return Promise.resolve();
-  const { id } = peekState;
+  const { id, srcLi } = peekState;
   peekState = null;
   const peek = $('#peek');
   const card = peek.querySelector('.peek-card');
-  const row = rowOf(id);
+  const row = srcLi && srcLi.isConnected ? srcLi.querySelector('.row') : rowOf(id);
   peek.classList.remove('open');
   const finish = () => {
     peek.hidden = true;
+    srcLi?.classList.remove('peeking');
     row?.parentElement.classList.remove('peeking');
   };
   if (reduceMotion() || !card.animate) {
@@ -1337,8 +1391,12 @@ function updateHint() {
 function syncKeyboardInset() {
   const vv = window.visualViewport;
   const kb = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
-  $('#composer').style.setProperty('--kb', `${Math.round(kb)}px`);
-  $('#composer').classList.toggle('kb', kb > 40);
+  const el = $('#composer');
+  const open = el.classList.contains('kb');
+  el.style.setProperty('--kb', `${Math.round(kb)}px`);
+  el.classList.toggle('kb', kb > 40);
+  // キーボードが閉じたら入力欄も閉じてホームに戻る
+  if (open && kb <= 40 && el.classList.contains('open')) closeComposer();
 }
 
 function openComposer() {
@@ -1385,6 +1443,14 @@ $('#quickForm').addEventListener('submit', (e) => {
   quickAdd();
 });
 $('#quickInput').addEventListener('input', updateHint);
+// キーボードの「完了」や画面外のタップで入力が終わったら、入力欄を閉じる
+$('#quickInput').addEventListener('blur', () => {
+  setTimeout(() => {
+    if (document.activeElement !== $('#quickInput')) closeComposer();
+  }, 60);
+});
+// 追加ボタンを押してもキーボードを閉じない（続けて入力できるように）
+$('#quickForm .send-btn').addEventListener('pointerdown', (e) => e.preventDefault());
 $('#fab').addEventListener('click', openComposer);
 $('#composer').addEventListener('click', (e) => {
   if (e.target.closest('[data-close-composer]')) closeComposer();
@@ -1409,6 +1475,7 @@ $('#quickChips').addEventListener('click', (e) => {
 function openDetailEditor() {
   const text = $('#quickInput').value;
   const preset = text.trim() ? resolveQuick(text) : { due: quickDue !== undefined ? quickDue : today(), star: quickStar };
+  $('#quickInput').value = '';
   closeComposer();
   openEditor(null, preset);
 }
@@ -1495,7 +1562,7 @@ $('#bulkBtn').addEventListener('click', () => {
   }
   $('#bulkText').value = '';
   closeSheet($('#settings'));
-  window.scrollTo(0, 0);
+  $('#list').scrollTo(0, 0);
 });
 // 上の入力欄に複数行を貼り付けたときも、1 行ずつ登録する
 $('#quickInput').addEventListener('paste', (e) => {
@@ -1556,6 +1623,10 @@ for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
 document.addEventListener('touchmove', (e) => {
   if (e.touches.length > 1) e.preventDefault();
 }, { passive: false });
+// 一覧をスクロールしたら、固定した上部に境目の影を出す
+$('#list').addEventListener('scroll', () => {
+  $('#headArea').classList.toggle('scrolled', $('#list').scrollTop > 2);
+}, { passive: true });
 applyTheme(currentTheme());
 render({ enter: true });
 updateBadge();

@@ -26,6 +26,7 @@
 </head>
 <body>
 <div class="app">
+  <div class="head-area" id="headArea">
   <header class="top">
     <div class="today">
       <span class="today-date" id="todayDate"></span>
@@ -42,6 +43,7 @@
   </header>
 
   <div class="counts" id="counts"></div>
+  </div>
 
   <main id="list"></main>
 </div>
@@ -146,6 +148,19 @@
 
     <button type="button" class="delete-btn" id="deleteBtn">このタスクを削除</button>
   </form>
+</div>
+
+<!-- 件数（期限切れ・今日・完了）を押したときの一覧 -->
+<div id="countSheet" class="backdrop" hidden>
+  <div class="sheet">
+    <div class="grabber"></div>
+    <div class="sheet-top">
+      <span></span>
+      <h2 id="countTitle"></h2>
+      <button type="button" class="close-btn" data-close>閉じる</button>
+    </div>
+    <div id="countBody"></div>
+  </div>
 </div>
 
 <!-- 記録シート -->

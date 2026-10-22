@@ -141,7 +141,8 @@ html, body {
   font-family: var(--font);
   -webkit-text-size-adjust: 100%;
 }
-body { min-height: 100dvh; padding-bottom: calc(120px + env(safe-area-inset-bottom)); }
+html, body { height: 100%; overflow: hidden; }
+body { overscroll-behavior: none; }
 button {
   font: inherit;
   color: inherit;
@@ -151,17 +152,35 @@ button {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.app { max-width: 640px; margin: 0 auto; }
+.app {
+  max-width: 640px;
+  height: 100vh;
+  height: 100dvh;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+/* 上部（日付と件数）は固定 */
+.head-area {
+  flex: none;
+  position: relative;
+  z-index: 5;
+  padding-bottom: 12px;
+  background: var(--bg);
+  transition: box-shadow .3s var(--ease);
+}
+.head-area.scrolled { box-shadow: 0 1px 0 var(--line), 0 8px 18px rgba(0, 0, 0, .06); }
+[data-theme="night"] .head-area.scrolled { box-shadow: 0 1px 0 var(--line), 0 8px 18px rgba(0, 0, 0, .3); }
 
 /* ===== ヘッダー ===== */
 .top {
-  padding: calc(env(safe-area-inset-top) + 16px) 20px 0;
+  padding: calc(env(safe-area-inset-top) + 10px) 20px 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
 .today { display: flex; align-items: baseline; gap: 8px; }
-.today-date { font-family: var(--num); font-size: 24px; font-weight: 700; letter-spacing: -.01em; }
+.today-date { font-family: var(--num); font-size: 22px; font-weight: 700; letter-spacing: -.01em; }
 .today-dow { font-size: 13px; color: var(--muted); }
 .head-actions { display: flex; gap: 6px; margin-right: -4px; }
 .icon-btn {
@@ -176,26 +195,30 @@ button {
 }
 
 /* ===== 件数 ===== */
-.counts { margin: 18px 20px 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.counts { margin: 10px 20px 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .count-tile {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 14px;
+  gap: 2px;
+  padding: 9px 12px 8px;
   border-radius: var(--r-lg);
   background: var(--surface);
   border: 1px solid var(--surface-line);
+  width: 100%;
+  text-align: left;
+  color: var(--text);
 }
+.count-tile:active { transform: scale(.97); }
 .count-label { font-size: 12px; font-weight: 700; color: var(--muted); }
-.count-num { font-family: var(--num); font-size: 40px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.count-num { font-family: var(--num); font-size: 28px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
 .count-tile.over:not(.zero) .count-label,
 .count-tile.over:not(.zero) .count-num { color: var(--danger); }
 .count-tile.zero .count-num { color: var(--faint); }
 
 /* 白とインク：箱ではなく線で区切る */
 [data-theme="ink"] .counts { gap: 0; border-top: 2px solid var(--text); border-bottom: 1px solid var(--line); }
-[data-theme="ink"] .count-tile { background: none; border: 0; border-radius: 0; padding: 14px 0 12px 16px; border-left: 1px solid var(--line); }
+[data-theme="ink"] .count-tile { background: none; border: 0; border-radius: 0; padding: 9px 0 8px 14px; border-left: 1px solid var(--line); }
 [data-theme="ink"] .count-tile:first-child { border-left: 0; padding-left: 0; }
 
 /* 石と森：期限切れを塗りつぶす */
@@ -314,10 +337,17 @@ body.composing .fab, body.sheet-open .fab { transform: scale(.6); opacity: 0; po
 .hint { padding: 0 20px 8px; font-size: 13px; color: var(--accent); }
 .hint:empty { display: none; }
 
-main { padding: 0 20px 24px; }
+main {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  padding: 0 20px calc(110px + env(safe-area-inset-bottom));
+}
 
 /* ===== セクション ===== */
-.section { margin-top: 24px; }
+.section { margin-top: 18px; }
 .section-head { display: flex; align-items: center; justify-content: space-between; min-height: 28px; margin-bottom: 10px; }
 .section-head h2 { margin: 0; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; letter-spacing: .04em; color: var(--muted); }
 .section.danger .section-head h2 { color: var(--danger); }
@@ -363,7 +393,7 @@ ul.tasks { list-style: none; margin: 0; padding: 0; }
 .task.peeking { opacity: 0; transition: opacity .15s; }
 .swiping .row { transition: none; }
 .when { display: flex; flex-direction: column; align-items: flex-end; padding-top: 1px; }
-.when-main { font-family: var(--num); font-size: 15px; font-weight: 700; line-height: 1.35; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.when-main { font-family: var(--num); font-size: 14px; font-weight: 700; line-height: 1.35; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .when-sub { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .is-over .when-main { color: var(--danger); }
 .task.is-today .when-main { color: var(--text); }
@@ -400,18 +430,18 @@ ul.tasks { list-style: none; margin: 0; padding: 0; }
 }
 .rail-line { flex: 1; width: 1.5px; min-height: 14px; margin-top: 4px; background: var(--line); }
 .task:last-child .rail-line { visibility: hidden; }
-.body { min-width: 0; padding-bottom: 20px; cursor: pointer; }
-.title { font-size: 17px; font-weight: 700; line-height: 1.35; word-break: break-word; }
+.body { min-width: 0; padding-bottom: 14px; cursor: pointer; }
+.title { font-size: 16px; font-weight: 700; line-height: 1.35; word-break: break-word; }
 [data-theme="forest"] .title { font-weight: 500; }
 .is-done .title { color: var(--muted); text-decoration: line-through; font-weight: 500; }
 .meta { display: flex; flex-wrap: wrap; gap: 2px 10px; margin-top: 4px; font-size: 13px; color: var(--muted); }
 .meta .over { color: var(--danger); font-weight: 700; }
 .note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-.quick-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.quick-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .pill {
   font-size: 13px;
   font-weight: 700;
-  padding: 8px 14px;
+  padding: 7px 13px;
   border-radius: var(--r-pill);
   background: var(--surface);
   border: 1px solid var(--line);
@@ -758,6 +788,10 @@ ul.tasks { list-style: none; margin: 0; padding: 0; }
 .col-day.sun { color: var(--danger); }
 .col.is-today .col-day { color: var(--accent); font-weight: 700; }
 #logBody .section { margin-top: 20px; }
+.count-list { padding: 14px 12px 0; border-radius: var(--r-lg); background: var(--row-bg); border: 1px solid var(--surface-line); }
+[data-theme="ink"] .count-list { border-color: var(--line); }
+.count-actions { display: flex; justify-content: flex-end; margin: -6px 0 6px; }
+.danger-text { color: var(--danger); }
 
 /* ===== 長押しの詳細 ===== */
 .peek { position: fixed; inset: 0; z-index: 35; display: flex; align-items: center; justify-content: center; padding: calc(env(safe-area-inset-top) + 20px) 20px calc(env(safe-area-inset-bottom) + 20px); }
