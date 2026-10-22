@@ -33,6 +33,14 @@
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
     </button>
   </form>
+  <div id="quickChips" class="quick-chips" hidden>
+    <button type="button" class="chip" data-due="today">今日</button>
+    <button type="button" class="chip" data-due="tomorrow">明日</button>
+    <button type="button" class="chip" data-due="weekend">週末</button>
+    <button type="button" class="chip" data-due="nextweek">来週</button>
+    <button type="button" class="chip" data-due="none">期限なし</button>
+    <button type="button" class="chip star-chip" data-star>★ 重要</button>
+  </div>
   <div id="hint" class="hint"></div>
 
   <main id="list"></main>
@@ -62,6 +70,7 @@
 <!-- タスク編集シート -->
 <div id="editor" class="backdrop" hidden>
   <form id="editForm" class="sheet" novalidate autocomplete="off">
+    <div class="grabber"></div>
     <div class="sheet-head">
       <h2 id="editorTitle">タスク</h2>
       <button type="button" class="icon-btn" data-close aria-label="閉じる">✕</button>
@@ -108,6 +117,7 @@
 <!-- 設定シート -->
 <div id="settings" class="backdrop" hidden>
   <div class="sheet">
+    <div class="grabber"></div>
     <div class="sheet-head">
       <h2>設定</h2>
       <button type="button" class="icon-btn" data-close aria-label="閉じる">✕</button>
@@ -135,6 +145,7 @@
         <li><code>歯医者 11/5 15時</code></li>
         <li><code>ゴミ出し 金曜 !</code>（! で重要）</li>
         <li>使える言葉: 今日 / 明日 / 明後日 / 週末 / 来週 / 月曜〜日曜 / 11/5 / 18:30 / 9時半</li>
+        <li>タスクを右にスワイプで完了、左にスワイプで明日（または今日）へ移動</li>
       </ul>
     </section>
   </div>

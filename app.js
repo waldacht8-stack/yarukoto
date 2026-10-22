@@ -3,6 +3,7 @@
 const STORE_KEY = 'yarukoto.tasks.v1';
 const VIEW_KEY = 'yarukoto.view';
 const BANNER_KEY = 'yarukoto.installBannerClosed';
+const SWIPE_TIP_KEY = 'yarukoto.swipeTipClosed';
 const WEEK = '日月火水木金土';
 const REPEAT_LABEL = { daily: '毎日', weekdays: '平日', weekly: '毎週', monthly: '毎月' };
 
@@ -13,6 +14,9 @@ let view = safeGet(VIEW_KEY) || 'today';
 let editingId = null;
 let undoSnapshot = null;
 let toastTimer = null;
+// クイック入力の下のボタンで選んだ期限（undefined ならタブごとの既定）と重要フラグ
+let quickDue;
+let quickStar = false;
 
 /* ---------- 保存 ---------- */
 
@@ -270,9 +274,9 @@ function defaultDueForView() {
 
 function resolveQuick(text) {
   const p = parseQuick(text);
-  let due = p.due !== undefined ? p.due : defaultDueForView();
+  let due = p.due !== undefined ? p.due : quickDue !== undefined ? quickDue : defaultDueForView();
   if (!due && p.time) due = today();
-  return { title: p.title, due, time: p.time || null, star: !!p.star };
+  return { title: p.title, due, time: p.time || null, star: !!p.star || quickStar };
 }
 
 /* ---------- 描画 ---------- */
@@ -292,6 +296,85 @@ function h(tag, attrs = {}, ...children) {
   return el;
 }
 
+const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// 行を縮めながら消す。完了・移動でリストから外れるときに使う
+function animateOut(el, delay = 0) {
+  if (!el.animate || reduceMotion()) return Promise.resolve();
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  return sleep(delay).then(() => Promise.race([
+    el.animate(
+      [{ height: `${el.offsetHeight}px`, opacity: 1 }, { height: '0px', opacity: 0 }],
+      { duration: 240, easing: 'ease-in', fill: 'forwards' },
+    ).finished.catch(() => {}),
+    // 描画が止まっている（バックグラウンドなど）ときもアニメーション待ちで固まらないようにする
+    sleep(400),
+  ]));
+}
+
+// 期限が今日以前なら「明日へ」、それ以外は「今日へ」
+function swipeLeftAction(t) {
+  return t.due && t.due <= today()
+    ? { label: '明日へ', due: addDays(today(), 1) }
+    : { label: '今日へ', due: today() };
+}
+
+function enableSwipe(li, row, { onRight, onLeft }) {
+  const THRESHOLD = 80;
+  let x0 = null;
+  let y0 = 0;
+  let dx = 0;
+  let dragging = false;
+
+  const reset = () => {
+    x0 = null;
+    li.classList.remove('swiping', 'sw-armed', 'sw-right', 'sw-left');
+    row.style.transform = '';
+  };
+  // スワイプ直後のタップで編集画面が開かないようにする
+  const swallowClick = () => {
+    const stopClick = (e) => { e.stopPropagation(); e.preventDefault(); };
+    row.addEventListener('click', stopClick, { capture: true, once: true });
+    setTimeout(() => row.removeEventListener('click', stopClick, { capture: true }), 80);
+  };
+
+  row.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    x0 = e.clientX;
+    y0 = e.clientY;
+    dx = 0;
+    dragging = false;
+  });
+  row.addEventListener('pointermove', (e) => {
+    if (x0 == null) return;
+    const mx = e.clientX - x0;
+    const my = e.clientY - y0;
+    if (!dragging) {
+      if (Math.abs(my) > 10 && Math.abs(my) > Math.abs(mx)) { x0 = null; return; }
+      if (Math.abs(mx) < 10) return;
+      dragging = true;
+      try { row.setPointerCapture(e.pointerId); } catch { /* 取れなくても続行できる */ }
+      li.classList.add('swiping');
+    }
+    dx = mx < 0 && !onLeft ? 0 : mx;
+    row.style.transform = `translateX(${dx}px)`;
+    li.classList.toggle('sw-right', dx > 0);
+    li.classList.toggle('sw-left', dx < 0);
+    li.classList.toggle('sw-armed', Math.abs(dx) > THRESHOLD);
+  });
+  row.addEventListener('pointerup', () => {
+    if (x0 == null || !dragging) { x0 = null; return; }
+    swallowClick();
+    const action = dx > THRESHOLD ? onRight : dx < -THRESHOLD ? onLeft : null;
+    if (!action) return reset();
+    x0 = null;
+    li.classList.remove('swiping');
+    row.style.transform = `translateX(${dx > 0 ? '' : '-'}100%)`;
+    action();
+  });
+  row.addEventListener('pointercancel', reset);
+}
+
 function taskItem(t) {
   const over = isOverdue(t);
   const meta = [];
@@ -303,6 +386,11 @@ function taskItem(t) {
   if (t.note) meta.push(h('span', { class: 'note' }, t.note.split('\n')[0]));
 
   const stop = (fn) => (e) => { e.stopPropagation(); fn(); };
+  const left = swipeLeftAction(t);
+  const li = h('li', { class: `task${over ? ' is-over' : ''}${t.done ? ' is-done' : ''}` });
+  const complete = (delay) => animateOut(li, delay).then(() => completeTask(t.id));
+  const moveOut = (due) => animateOut(li).then(() => moveTasks([t.id], due));
+
   const check = h('button', {
     type: 'button',
     class: 'check',
@@ -310,18 +398,18 @@ function taskItem(t) {
     onclick: stop(() => {
       if (t.done) return uncompleteTask(t.id);
       check.classList.add('checking');
-      setTimeout(() => completeTask(t.id), 220);
+      complete(180);
     }),
   });
 
-  return h('li', { class: `task${over ? ' is-over' : ''}${t.done ? ' is-done' : ''}` },
+  const row = h('div', { class: 'row' },
     check,
     h('div', { class: 'body', onclick: () => openEditor(t.id) },
       h('div', { class: 'title' }, t.title),
       meta.length ? h('div', { class: 'meta' }, meta) : null,
       over ? h('div', { class: 'quick-actions' },
-        h('button', { type: 'button', class: 'pill', onclick: stop(() => moveTasks([t.id], today())) }, '今日やる'),
-        h('button', { type: 'button', class: 'pill', onclick: stop(() => moveTasks([t.id], addDays(today(), 1))) }, '明日に'),
+        h('button', { type: 'button', class: 'pill', onclick: stop(() => moveOut(today())) }, '今日やる'),
+        h('button', { type: 'button', class: 'pill', onclick: stop(() => moveOut(addDays(today(), 1))) }, '明日に'),
         h('button', { type: 'button', class: 'pill', onclick: stop(() => openEditor(t.id)) }, '日付を選ぶ'),
       ) : null,
     ),
@@ -332,13 +420,99 @@ function taskItem(t) {
       onclick: stop(() => toggleStar(t.id)),
     }, t.star ? '★' : '☆'),
   );
+
+  li.append(
+    h('div', { class: 'swipe-bg', 'aria-hidden': 'true' },
+      h('span', { class: 'sw-label-right' }, t.done ? '↩ 戻す' : '✓ 完了'),
+      h('span', { class: 'sw-label-left' }, t.done ? '' : `${left.label} →`),
+    ),
+    row,
+  );
+  enableSwipe(li, row, {
+    onRight: t.done ? () => uncompleteTask(t.id) : () => complete(0),
+    onLeft: t.done ? null : () => moveOut(left.due),
+  });
+  return li;
 }
 
-function section(title, items, { danger = false, action = null } = {}) {
-  return h('section', { class: `section${danger ? ' danger' : ''}` },
-    h('div', { class: 'section-head' }, h('h2', {}, title), action),
+function section(title, items, { danger = false, action = null, id = null, count = true } = {}) {
+  return h('section', { class: `section${danger ? ' danger' : ''}`, id },
+    h('div', { class: 'section-head' },
+      h('h2', {}, title, count ? h('span', { class: 'section-count' }, items.length) : null),
+      action),
     h('ul', { class: 'tasks' }, items.map(taskItem)),
   );
+}
+
+// 今日の進み具合（リング＋残り件数）
+function todaySummary(overdue, todays) {
+  const td = today();
+  const doneToday = tasks.filter((t) => t.done && t.doneAt && ymd(new Date(t.doneAt)) === td).length;
+  const remain = overdue.length + todays.length;
+  const total = remain + doneToday;
+  if (!total) return null;
+  const ratio = doneToday / total;
+  const r = 24;
+  const c = 2 * Math.PI * r;
+  const ring = h('div', { class: 'ring' });
+  ring.innerHTML = `<svg viewBox="0 0 60 60" aria-hidden="true"><circle cx="30" cy="30" r="${r}" class="ring-bg"/>`
+    + `<circle cx="30" cy="30" r="${r}" class="ring-fg" stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${(c * (1 - ratio)).toFixed(1)}"/></svg>`
+    + `<span>${Math.round(ratio * 100)}<small>%</small></span>`;
+  return h('div', { class: 'summary' },
+    ring,
+    h('div', { class: 'summary-text' },
+      h('div', { class: 'summary-main' }, remain ? `あと ${remain} 件` : '今日の分はすべて完了！'),
+      h('div', { class: 'summary-sub' },
+        overdue.length ? h('span', { class: 'over' }, `期限切れ ${overdue.length}`) : null,
+        h('span', {}, `今日 ${todays.length}`),
+        h('span', {}, `完了 ${doneToday}`),
+      ),
+    ),
+  );
+}
+
+// 予定タブ上部の 2 週間カレンダー
+function weekStrip() {
+  const td = today();
+  const counts = new Map();
+  for (const t of activeTasks()) {
+    if (!t.due) continue;
+    const key = t.due < td ? td : t.due;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  const days = [];
+  for (let i = 0; i < 14; i++) {
+    const d = addDays(td, i);
+    const dow = parseYmd(d).getDay();
+    const n = counts.get(d) || 0;
+    const cls = ['day', i === 0 && 'is-today', n && 'has', dow === 0 && 'sun', dow === 6 && 'sat'].filter(Boolean).join(' ');
+    days.push(h('button', {
+      type: 'button',
+      class: cls,
+      'aria-label': `${fmtMD(d)} ${n}件`,
+      onclick: () => {
+        if (i === 0) return setView('today');
+        const s = document.getElementById(`d-${d}`);
+        if (s) s.scrollIntoView({ behavior: reduceMotion() ? 'auto' : 'smooth', block: 'start' });
+      },
+    },
+    h('span', { class: 'dow' }, i === 0 ? '今日' : WEEK[dow]),
+    h('span', { class: 'dn' }, parseYmd(d).getDate()),
+    h('span', { class: 'dots' }, n > 3 ? `${n}` : '•'.repeat(n))));
+  }
+  return h('div', { class: 'week' }, days);
+}
+
+function swipeTip() {
+  if (safeGet(SWIPE_TIP_KEY) || !activeTasks().length) return null;
+  const el = h('div', { class: 'tip' },
+    h('p', {}, '右にスワイプで完了、左にスワイプで明日（または今日）へ移動できます。'),
+    h('button', {
+      type: 'button', class: 'text-btn', 'aria-label': '閉じる',
+      onclick: () => { safeSet(SWIPE_TIP_KEY, '1'); el.remove(); },
+    }, 'OK'),
+  );
+  return el;
 }
 
 function empty(strong, text) {
@@ -365,9 +539,8 @@ const VIEWS = {
     build() {
       const overdue = activeTasks().filter(isOverdue).sort(cmpTask);
       const todays = activeTasks().filter(isDueToday).sort(cmpTask);
-      const out = [installBanner()];
+      const out = [installBanner(), todaySummary(overdue, todays)];
       if (overdue.length) {
-        out.push(h('div', { class: 'alert' }, `期限切れが ${overdue.length} 件あります。今日片づけるか、日付を決め直しましょう。`));
         out.push(section('期限切れ', overdue, {
           danger: true,
           action: overdue.length > 1
@@ -380,6 +553,7 @@ const VIEWS = {
         const some = activeTasks().filter((t) => !t.due).length;
         out.push(empty('今日のタスクはすべて完了 🎉', some ? `「やりたい」に ${some} 件あります。余裕があれば手をつけてみましょう。` : '上の欄から追加できます。'));
       }
+      out.push(swipeTip());
       return out;
     },
   },
@@ -389,17 +563,17 @@ const VIEWS = {
     build() {
       const td = today();
       const list = activeTasks().filter((t) => t.due && t.due > td).sort(cmpTask);
-      if (!list.length) return [empty('先の予定はありません', '期限のあるタスクがここに日付順で並びます。')];
+      if (!list.length) return [weekStrip(), empty('先の予定はありません', '期限のあるタスクがここに日付順で並びます。')];
       const groups = new Map();
       for (const t of list) {
         if (!groups.has(t.due)) groups.set(t.due, []);
         groups.get(t.due).push(t);
       }
-      return [...groups].map(([due, items]) => {
+      return [weekStrip(), ...[...groups].map(([due, items]) => {
         const diff = diffDays(due, td);
-        const prefix = diff === 1 ? '明日 · ' : diff === 2 ? '明後日 · ' : '';
-        return section(prefix + fmtMD(due), items);
-      });
+        const prefix = diff === 1 ? '明日 · ' : diff === 2 ? '明後日 · ' : diff < 7 ? '' : `${diff}日後 · `;
+        return section(prefix + fmtMD(due), items, { id: `d-${due}` });
+      })];
     },
   },
   someday: {
@@ -409,7 +583,7 @@ const VIEWS = {
       const list = activeTasks().filter((t) => !t.due)
         .sort((a, b) => (b.star ? 1 : 0) - (a.star ? 1 : 0) || b.createdAt - a.createdAt);
       if (!list.length) return [empty('思いついたことを気軽にメモ', '期限のないアイデアや「いつかやりたい」はここへ。日付を決めたら予定に移ります。')];
-      return [section(`${list.length} 件`, list)];
+      return [section(`${list.length} 件`, list, { count: false })];
     },
   },
   done: {
@@ -420,6 +594,7 @@ const VIEWS = {
       if (!list.length) return [empty('まだ完了したタスクはありません', '')];
       const todayDone = list.filter((t) => ymd(new Date(t.doneAt)) === today()).length;
       return [section(`今日 ${todayDone} 件完了`, list, {
+        count: false,
         action: h('button', { type: 'button', class: 'text-btn', onclick: clearDone }, '履歴を削除'),
       })];
     },
@@ -594,13 +769,31 @@ async function importData(file) {
 
 function updateHint() {
   const text = $('#quickInput').value;
+  // 期限ボタンは、入力中の文字も反映した「実際に入る期限」を光らせる
+  const r = resolveQuick(text.trim() ? text : 'x');
+  document.querySelectorAll('#quickChips .chip').forEach((c) => {
+    if (c.hasAttribute('data-star')) c.classList.toggle('on', r.star);
+    else c.classList.toggle('on', c.dataset.due === 'none' ? !r.due : presetDue(c.dataset.due) === r.due);
+  });
   if (!text.trim()) {
     $('#hint').textContent = '';
     return;
   }
-  const r = resolveQuick(text);
   const where = r.due ? dueLabel({ due: r.due, time: r.time }) : 'やりたいこと';
   $('#hint').textContent = `→ ${where}${r.star ? ' · ★' : ''} に追加`;
+}
+
+function showQuickChips(show) {
+  $('#quickChips').hidden = !show;
+}
+
+function setView(next) {
+  view = next;
+  quickDue = undefined;
+  quickStar = false;
+  safeSet(VIEW_KEY, view);
+  render();
+  window.scrollTo(0, 0);
 }
 
 $('#quickForm').addEventListener('submit', (e) => {
@@ -612,18 +805,26 @@ $('#quickForm').addEventListener('submit', (e) => {
   commit(addedMessage(t));
 });
 $('#quickInput').addEventListener('input', updateHint);
+$('#quickInput').addEventListener('focus', () => showQuickChips(true));
+$('#quickInput').addEventListener('blur', () => {
+  if (!$('#quickInput').value.trim()) showQuickChips(false);
+});
+// ボタンを押してもキーボードが閉じないように、フォーカスを奪わせない
+$('#quickChips').addEventListener('pointerdown', (e) => e.preventDefault());
+$('#quickChips').addEventListener('click', (e) => {
+  const chip = e.target.closest('.chip');
+  if (!chip) return;
+  if (chip.hasAttribute('data-star')) quickStar = !quickStar;
+  else quickDue = presetDue(chip.dataset.due) || null;
+  updateHint();
+});
 $('#detailBtn').addEventListener('click', () => {
   const text = $('#quickInput').value;
   openEditor(null, text.trim() ? resolveQuick(text) : { due: defaultDueForView() });
 });
 
 document.querySelectorAll('.tabs button').forEach((b) => {
-  b.addEventListener('click', () => {
-    view = b.dataset.view;
-    safeSet(VIEW_KEY, view);
-    render();
-    window.scrollTo(0, 0);
-  });
+  b.addEventListener('click', () => setView(b.dataset.view));
 });
 
 $('#editForm').addEventListener('submit', saveEditor);
