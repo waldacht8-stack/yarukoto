@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ja">
+<html lang="ja" data-theme="ink">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
@@ -7,35 +7,46 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="やること">
-<meta name="theme-color" content="#f5f5f2" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#111113" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#FFFFFF">
+<script>
+  // 描画前にテーマを当てて、ちらつきを防ぐ
+  try {
+    var savedTheme = localStorage.getItem('yarukoto.theme');
+    if (savedTheme === 'forest' || savedTheme === 'night') document.documentElement.dataset.theme = savedTheme;
+  } catch (e) { /* 保存領域が使えないときは既定のまま */ }
+</script>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&amp;family=Fraunces:opsz,wght@9..144,600;9..144,700&amp;family=Manrope:wght@500;700;800&amp;family=Inter:wght@500;700;800&amp;family=Zen+Kaku+Gothic+New:wght@400;500;700&amp;display=swap">
 <link rel="stylesheet" href="style.css">
 <title>やること</title>
 </head>
 <body>
 <div class="app">
   <header class="top">
-    <div>
-      <div class="date" id="todayLabel"></div>
-      <h1>やること</h1>
+    <div class="today">
+      <span class="today-date" id="todayDate"></span>
+      <span class="today-dow" id="todayDow"></span>
     </div>
     <div class="head-actions">
-    <button type="button" id="logBtn" class="icon-btn" aria-label="記録">
-      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20h16M7 16v-4M12 16V7M17 16v-7"/></svg>
-    </button>
-    <button type="button" id="settingsBtn" class="icon-btn" aria-label="設定">
-      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
-    </button>
+      <button type="button" id="logBtn" class="icon-btn" aria-label="記録">
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 20h16M7 16v-4M12 16V7M17 16v-7"/></svg>
+      </button>
+      <button type="button" id="settingsBtn" class="icon-btn" aria-label="設定">
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+      </button>
     </div>
   </header>
 
+  <div class="counts" id="counts"></div>
+
   <form id="quickForm" class="quick" autocomplete="off">
-    <input id="quickInput" type="text" enterkeyhint="done" aria-label="タスクを追加" placeholder="やることを追加（例: 牛乳を買う 明日 18時）">
-    <button type="button" id="detailBtn" class="icon-btn add-btn" aria-label="詳細を指定して追加">
-      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    <input id="quickInput" type="text" enterkeyhint="done" aria-label="タスクを追加" placeholder="やることを追加…">
+    <button type="button" id="detailBtn" class="add-btn" aria-label="追加">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
     </button>
   </form>
   <div id="quickChips" class="quick-chips" hidden>
@@ -45,57 +56,69 @@
     <button type="button" class="chip" data-due="nextweek">来週</button>
     <button type="button" class="chip" data-due="none">期限なし</button>
     <button type="button" class="chip star-chip" data-star>★ 重要</button>
+    <button type="button" class="chip" data-detail>詳しく…</button>
   </div>
   <div id="hint" class="hint"></div>
 
   <main id="list"></main>
 </div>
 
-
 <!-- タスク編集シート -->
 <div id="editor" class="backdrop" hidden>
   <form id="editForm" class="sheet" novalidate autocomplete="off">
     <div class="grabber"></div>
-    <div class="sheet-head">
-      <h2 id="editorTitle">タスク</h2>
-      <button type="button" class="icon-btn" data-close aria-label="閉じる">✕</button>
+    <div class="sheet-top">
+      <button type="button" class="cancel-btn" data-close>キャンセル</button>
+      <h2 id="editorTitle">タスクを編集</h2>
+      <button type="submit" class="save-btn">保存</button>
     </div>
-    <input type="text" id="fTitle" class="title-input" placeholder="やること" enterkeyhint="done">
+
+    <input type="text" id="fTitle" class="title-input" placeholder="やること" aria-label="やること" enterkeyhint="done">
+
     <div class="field">
-      <label for="fDue">期限</label>
-      <div class="chips" id="dueChips">
-        <button type="button" class="chip" data-due="today">今日</button>
-        <button type="button" class="chip" data-due="tomorrow">明日</button>
-        <button type="button" class="chip" data-due="weekend">週末</button>
-        <button type="button" class="chip" data-due="nextweek">来週</button>
-        <button type="button" class="chip" data-due="none">なし</button>
+      <div class="field-head"><span>期限</span><span class="due-note" id="dueNote"></span></div>
+      <div class="days" id="dayPills"></div>
+      <div class="opts">
+        <label class="opt" id="timeBox">
+          <span class="opt-label">時刻</span>
+          <b id="timeText">なし</b>
+          <input type="time" id="fTime" class="overlay" aria-label="時刻">
+        </label>
+        <label class="opt">
+          <span class="opt-label">ほかの日</span>
+          <b id="otherText">選ぶ</b>
+          <input type="date" id="fDue" class="overlay" aria-label="期限日">
+        </label>
+        <button type="button" class="opt" id="noDueBtn">
+          <span class="opt-label">期限</span>
+          <b>なし</b>
+        </button>
       </div>
-      <div class="row2">
-        <input type="date" id="fDue" aria-label="期限日">
-        <input type="time" id="fTime" aria-label="時刻">
+    </div>
+
+    <div class="field">
+      <div class="field-head"><span>くり返し</span></div>
+      <div class="seg" id="repeatSeg" role="group" aria-label="くり返し">
+        <button type="button" data-v="none">なし</button>
+        <button type="button" data-v="daily">毎日</button>
+        <button type="button" data-v="weekdays">平日</button>
+        <button type="button" data-v="weekly">毎週</button>
+        <button type="button" data-v="monthly">毎月</button>
       </div>
+      <input type="hidden" id="fRepeat" value="none">
     </div>
+
+    <label class="switch-row">
+      <span>重要にする</span>
+      <input type="checkbox" id="fStar" class="switch">
+    </label>
+
     <div class="field">
-      <label for="fRepeat">くり返し</label>
-      <select id="fRepeat">
-        <option value="none">なし</option>
-        <option value="daily">毎日</option>
-        <option value="weekdays">平日（月〜金）</option>
-        <option value="weekly">毎週</option>
-        <option value="monthly">毎月</option>
-      </select>
-    </div>
-    <div class="field">
-      <label class="toggle"><input type="checkbox" id="fStar"> <span>重要（★）</span></label>
-    </div>
-    <div class="field">
-      <label for="fNote">メモ</label>
+      <div class="field-head"><label for="fNote">メモ</label></div>
       <textarea id="fNote" placeholder="細かいこと、リンク、手順など"></textarea>
     </div>
-    <div class="sheet-actions">
-      <button type="button" class="btn danger" id="deleteBtn">削除</button>
-      <button type="submit" class="btn primary">保存</button>
-    </div>
+
+    <button type="button" class="delete-btn" id="deleteBtn">このタスクを削除</button>
   </form>
 </div>
 
@@ -103,9 +126,10 @@
 <div id="logSheet" class="backdrop" hidden>
   <div class="sheet">
     <div class="grabber"></div>
-    <div class="sheet-head">
+    <div class="sheet-top">
+      <span></span>
       <h2>記録</h2>
-      <button type="button" class="icon-btn" data-close aria-label="閉じる">✕</button>
+      <button type="button" class="close-btn" data-close>閉じる</button>
     </div>
     <div id="logBody"></div>
   </div>
@@ -115,42 +139,91 @@
 <div id="settings" class="backdrop" hidden>
   <div class="sheet">
     <div class="grabber"></div>
-    <div class="sheet-head">
+    <div class="sheet-top">
+      <span></span>
       <h2>設定</h2>
-      <button type="button" class="icon-btn" data-close aria-label="閉じる">✕</button>
+      <button type="button" class="close-btn" data-close>閉じる</button>
     </div>
-    <section class="setting">
-      <h3>アイコンのバッジ</h3>
-      <p>ホーム画面のアイコンに「期限切れ＋今日」の件数を表示します。ホーム画面に追加したアプリから有効にしてください。</p>
-      <button type="button" class="btn" id="badgeBtn">バッジを有効にする</button>
-      <p class="status" id="badgeStatus"></p>
+
+    <section class="set-group">
+      <h3 class="set-title">デザイン</h3>
+      <div class="theme-picker" id="themePicker">
+        <label class="theme-opt">
+          <input type="radio" name="theme" value="ink">
+          <span class="theme-swatch sw-ink" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="theme-name">白とインク</span>
+        </label>
+        <label class="theme-opt">
+          <input type="radio" name="theme" value="forest">
+          <span class="theme-swatch sw-forest" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="theme-name">石と森</span>
+        </label>
+        <label class="theme-opt">
+          <input type="radio" name="theme" value="night">
+          <span class="theme-swatch sw-night" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="theme-name">夜の紺</span>
+        </label>
+      </div>
     </section>
-    <section class="setting">
-      <h3>まとめて追加</h3>
-      <p>1行に1つずつ書くと、まとめて登録します。日付や時刻は入力欄と同じ書き方（例: <code>歯医者 11/5 15:00</code>）。日付のない行は「やりたいこと」に入ります。</p>
-      <textarea id="bulkText" class="bulk" rows="5" placeholder="牛乳を買う 明日&#10;歯医者 11/5 15:00&#10;読みたい本"></textarea>
-      <button type="button" class="btn" id="bulkBtn">まとめて追加</button>
+
+    <section class="set-group">
+      <h3 class="set-title">お知らせ</h3>
+      <div class="set-card">
+        <label class="set-row">
+          <span class="set-text">
+            <span>アイコンに件数を表示</span>
+            <span class="set-sub" id="badgeStatus">期限切れと今日の合計</span>
+          </span>
+          <input type="checkbox" id="badgeSwitch" class="switch">
+        </label>
+      </div>
     </section>
-    <section class="setting">
-      <h3>バックアップ</h3>
-      <p>データはこの端末の中だけに保存されています。ときどき書き出しておくと安心です。</p>
-      <div class="btn-row">
-        <button type="button" class="btn" id="exportBtn">書き出す</button>
-        <button type="button" class="btn" id="importBtn">読み込む</button>
+
+    <section class="set-group">
+      <h3 class="set-title">入力</h3>
+      <div class="set-card">
+        <details class="set-acc">
+          <summary class="set-row">
+            <span class="set-text"><span>まとめて追加</span><span class="set-sub">1行に1つずつ貼り付け</span></span>
+            <span class="chev" aria-hidden="true"></span>
+          </summary>
+          <div class="acc-body">
+            <textarea id="bulkText" class="bulk" rows="5" aria-label="まとめて追加するタスク" placeholder="牛乳を買う 明日&#10;歯医者 11/5 15:00&#10;読みたい本"></textarea>
+            <button type="button" class="btn primary" id="bulkBtn">まとめて追加</button>
+          </div>
+        </details>
+        <details class="set-acc">
+          <summary class="set-row">
+            <span class="set-text"><span>日付の書き方</span><span class="set-sub">スペースのあとに書くと期限になります</span></span>
+            <span class="chev" aria-hidden="true"></span>
+          </summary>
+          <div class="acc-body">
+            <ul class="tips">
+              <li><code>牛乳を買う 明日</code></li>
+              <li><code>歯医者 11/5 15時</code></li>
+              <li><code>ゴミ出し 金曜 !</code>（! で重要）</li>
+              <li>今日 / 明日 / 明後日 / 週末 / 来週 / 月曜〜日曜 / 11/5 / 18:30 / 9時半</li>
+              <li>右スワイプで完了、左スワイプで明日（または今日）へ</li>
+            </ul>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <section class="set-group">
+      <h3 class="set-title">データ</h3>
+      <div class="set-card">
+        <div class="set-row">
+          <span class="set-text"><span>この端末に保存中</span><span class="set-sub" id="lastExport">書き出し：まだありません</span></span>
+        </div>
+        <div class="set-buttons">
+          <button type="button" class="btn primary" id="exportBtn">書き出す</button>
+          <button type="button" class="btn" id="importBtn">読み込む</button>
+        </div>
       </div>
       <input type="file" id="importFile" accept="application/json,.json" hidden>
     </section>
-    <section class="setting">
-      <h3>入力のコツ</h3>
-      <p>上の入力欄で、スペースのあとに日付を書くと期限になります。</p>
-      <ul class="tips">
-        <li><code>牛乳を買う 明日</code></li>
-        <li><code>歯医者 11/5 15時</code></li>
-        <li><code>ゴミ出し 金曜 !</code>（! で重要）</li>
-        <li>使える言葉: 今日 / 明日 / 明後日 / 週末 / 来週 / 月曜〜日曜 / 11/5 / 18:30 / 9時半</li>
-        <li>タスクを右にスワイプで完了、左にスワイプで明日（または今日）へ移動</li>
-      </ul>
-    </section>
+
     <p class="version" id="appVersion"></p>
   </div>
 </div>

@@ -1,7 +1,16 @@
 'use strict';
 
-const APP_VERSION = '7';
+const APP_VERSION = '8';
 const STORE_KEY = 'yarukoto.tasks.v1';
+const THEME_KEY = 'yarukoto.theme';
+const BADGE_KEY = 'yarukoto.badge';
+const EXPORT_KEY = 'yarukoto.lastExport';
+// テーマ名と、iPhone の上部バーに使う色
+const THEMES = {
+  ink: { name: '白とインク', bar: '#FFFFFF' },
+  forest: { name: '石と森', bar: '#E6E8E1' },
+  night: { name: '夜の紺', bar: '#0E1525' },
+};
 const FOLD_KEY = 'yarukoto.folded';
 const BANNER_KEY = 'yarukoto.installBannerClosed';
 const SWIPE_TIP_KEY = 'yarukoto.swipeTipClosed';
@@ -19,7 +28,7 @@ let quickDue;
 let quickStar = false;
 // 次の描画で特定のタスクに付けるアニメーション用クラス（id → クラス）
 const fx = new Map();
-let lastRatio = null;
+let lastCounts = null;
 let lastRemain = null;
 
 function mark(id, cls) {
@@ -72,10 +81,6 @@ function nowHM() {
 function fmtMD(s) {
   const d = parseYmd(s);
   return `${d.getMonth() + 1}/${d.getDate()}(${WEEK[d.getDay()]})`;
-}
-function fmtLong(s) {
-  const d = parseYmd(s);
-  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日（${WEEK[d.getDay()]}）`;
 }
 // 次の指定曜日。includeToday なら今日も候補に含める
 function nextDow(dow, includeToday) {
@@ -414,23 +419,44 @@ function enableSwipe(li, row, { onRight, onLeft }) {
   row.addEventListener('pointercancel', reset);
 }
 
-function taskItem(t) {
+// 左の日付列に出す文字（上段・下段）
+function whenLabels(t, showDate) {
+  if (t.done) {
+    const d = t.doneAt ? new Date(t.doneAt) : null;
+    return [d ? `${d.getHours()}:${pad(d.getMinutes())}` : '', '完了'];
+  }
+  if (!t.due) return ['', ''];
+  const d = parseYmd(t.due);
+  const main = showDate ? `${d.getMonth() + 1}/${d.getDate()}` : '';
+  // 時刻があれば時刻、なければ曜日（今日と期限切れは曜日を省く）
+  const sub = t.time || (showDate && t.due > today() ? WEEK[d.getDay()] : '');
+  return [main, sub];
+}
+
+function taskItem(t, { showDate = true } = {}) {
+  const td = today();
   const over = isOverdue(t);
   const meta = [];
   if (t.done) {
     if (t.late === true) meta.push(h('span', { class: 'tag late' }, '遅れて完了'));
     if (t.late === false) meta.push(h('span', { class: 'tag ontime' }, '期日内'));
-    if (t.due) meta.push(h('span', { class: 'due' }, `期限 ${fmtMD(t.due)}`));
-  } else if (t.due) {
-    const cls = over ? 'due over' : t.due === today() ? 'due today' : 'due';
-    meta.push(h('span', { class: cls }, dueLabel(t)));
+    if (t.due) meta.push(h('span', {}, `期限 ${fmtMD(t.due)}`));
+  } else if (over) {
+    const days = diffDays(td, t.due);
+    meta.push(h('span', { class: 'over' }, days > 0 ? `${days}日超過` : '時刻を過ぎています'));
   }
   if (t.repeat && t.repeat !== 'none') meta.push(h('span', {}, `↻ ${REPEAT_LABEL[t.repeat]}`));
   if (t.note) meta.push(h('span', { class: 'note' }, t.note.split('\n')[0]));
 
+  const kind = t.done ? 'is-done'
+    : over ? 'is-over'
+      : !t.due ? 'is-someday'
+        : t.due === td ? 'is-today'
+          : t.due > addDays(td, 7) ? 'is-later' : '';
+  const [whenMain, whenSub] = whenLabels(t, showDate);
   const stop = (fn) => (e) => { e.stopPropagation(); fn(); };
   const left = swipeLeftAction(t);
-  const li = h('li', { class: `task${over ? ' is-over' : ''}${t.done ? ' is-done' : ''}${fx.get(t.id) || ''}` });
+  const li = h('li', { class: `task ${kind}${fx.get(t.id) || ''}` });
   const complete = (delay) => {
     li.classList.add('completing');
     return animateOut(li, delay).then(() => completeTask(t.id));
@@ -451,17 +477,19 @@ function taskItem(t) {
   });
 
   const row = h('div', { class: 'row' },
-    check,
+    h('div', { class: 'when' },
+      h('span', { class: 'when-main' }, whenMain),
+      whenSub ? h('span', { class: 'when-sub' }, whenSub) : null),
+    h('div', { class: 'rail' }, check, h('span', { class: 'rail-line' })),
     h('div', { class: 'body', onclick: () => openEditor(t.id) },
       h('div', { class: 'title' }, t.title),
       meta.length ? h('div', { class: 'meta' }, meta) : null,
       over ? h('div', { class: 'quick-actions' },
-        h('button', { type: 'button', class: 'pill', onclick: stop(() => moveOut(today())) }, '今日やる'),
-        h('button', { type: 'button', class: 'pill', onclick: stop(() => moveOut(addDays(today(), 1))) }, '明日に'),
-        h('button', { type: 'button', class: 'pill', onclick: stop(() => openEditor(t.id)) }, '日付を選ぶ'),
+        h('button', { type: 'button', class: 'pill strong', onclick: stop(() => moveOut(today())) }, '今日やる'),
+        h('button', { type: 'button', class: 'pill', onclick: stop(() => moveOut(addDays(today(), 1))) }, '明日へ'),
       ) : null,
     ),
-    t.done ? null : h('button', {
+    t.done ? h('span') : h('button', {
       type: 'button',
       class: `star${t.star ? ' on' : ''}`,
       'aria-label': t.star ? '重要を外す' : '重要にする',
@@ -494,7 +522,8 @@ function section(title, items, { key = null, danger = false, action = null, coun
   // 見出し内のボタンを押しても折りたたまれないようにする
   if (action) action.addEventListener('click', (e) => e.preventDefault());
   const list = h('ul', { class: 'tasks' }, items.map((t, i) => {
-    const li = taskItem(t);
+    // 同じ日付が続くときは、日付列を最初の 1 件だけに出す
+    const li = taskItem(t, { showDate: i === 0 || items[i - 1].due !== t.due });
     li.style.setProperty('--i', i);
     return li;
   }));
@@ -514,43 +543,31 @@ function section(title, items, { key = null, danger = false, action = null, coun
   return el;
 }
 
-// 今日の進み具合（リング＋残り件数）
-function todaySummary(overdue, todays) {
-  const td = today();
-  const doneToday = tasks.filter((t) => t.done && t.doneAt && ymd(new Date(t.doneAt)) === td).length;
-  const remain = overdue.length + todays.length;
-  const total = remain + doneToday;
-  if (!total) return null;
-  const ratio = doneToday / total;
-  const from = lastRatio ?? 0;
-  const r = 24;
-  const c = 2 * Math.PI * r;
-  const ring = h('div', { class: 'ring' });
-  ring.innerHTML = `<svg viewBox="0 0 60 60" aria-hidden="true"><circle cx="30" cy="30" r="${r}" class="ring-bg"/>`
-    + `<circle cx="30" cy="30" r="${r}" class="ring-fg" stroke-dasharray="${c.toFixed(1)}" style="stroke-dashoffset:${(c * (1 - from)).toFixed(1)}"/></svg>`
-    + `<span><b>${Math.round(from * 100)}</b><small>%</small></span>`;
-  // 前回の値から今回の値までリングと数字を動かす
-  const fg = ring.querySelector('.ring-fg');
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    fg.style.strokeDashoffset = (c * (1 - ratio)).toFixed(1);
-  }));
-  countUp(ring.querySelector('b'), Math.round(from * 100), Math.round(ratio * 100));
-  const celebrate = lastRemain > 0 && remain === 0;
-  lastRatio = ratio;
-  lastRemain = remain;
-  if (celebrate) setTimeout(() => burst(ring, { count: 14, dist: 44 }), 450);
+// 上部の件数（期限切れ・今日・完了）。数が変わったら前の値から数え直す
+function renderCounts(over, todays, done) {
+  const el = $('#counts');
+  const now = { over, today: todays, done };
+  const tile = (key, label) => {
+    const n = now[key];
+    const from = lastCounts ? lastCounts[key] : n;
+    const num = h('span', { class: 'count-num' }, from);
+    if (from !== n) countUp(num, from, n);
+    return h('div', { class: `count-tile ${key}${n ? '' : ' zero'}` },
+      h('span', { class: 'count-label' }, label), num);
+  };
+  el.replaceChildren(tile('over', '期限切れ'), tile('today', '今日'), tile('done', '完了'));
 
-  return h('div', { class: `summary${celebrate ? ' celebrate' : ''}${remain ? '' : ' all-done'}` },
-    ring,
-    h('div', { class: 'summary-text' },
-      h('div', { class: 'summary-main' }, remain ? `あと ${remain} 件` : '今日の分はすべて完了！'),
-      h('div', { class: 'summary-sub' },
-        overdue.length ? h('span', { class: 'over' }, `期限切れ ${overdue.length}`) : null,
-        h('span', {}, `今日 ${todays.length}`),
-        h('span', {}, `完了 ${doneToday}`),
-      ),
-    ),
-  );
+  // 今日の分を全部終えた瞬間だけ祝う
+  const remain = over + todays;
+  const celebrate = lastRemain > 0 && remain === 0 && done > 0;
+  el.classList.remove('celebrate');
+  if (celebrate) {
+    void el.offsetWidth;
+    el.classList.add('celebrate');
+    setTimeout(() => burst(el.querySelector('.count-tile.done'), { count: 14, dist: 40 }), 300);
+  }
+  lastRemain = remain;
+  lastCounts = now;
 }
 
 function dayKey(ts) { return ymd(new Date(ts)); }
@@ -667,7 +684,8 @@ function buildList() {
   const doneToday = tasks.filter((t) => t.done && t.doneAt && dayKey(t.doneAt) === td)
     .sort((a, b) => b.doneAt - a.doneAt);
 
-  const out = [installBanner(), todaySummary(overdue, todays)];
+  renderCounts(overdue.length, todays.length, doneToday.length);
+  const out = [installBanner()];
   if (overdue.length) {
     out.push(section('期限切れ', overdue, {
       key: 'overdue',
@@ -750,7 +768,9 @@ function renderLog() {
 function render({ enter = false } = {}) {
   const list = $('#list');
   if (enter) playEnter(list);
-  $('#todayLabel').textContent = fmtLong(today());
+  const now = new Date();
+  $('#todayDate').textContent = `${now.getMonth() + 1}月${now.getDate()}日`;
+  $('#todayDow').textContent = `${WEEK[now.getDay()]}曜日`;
   list.replaceChildren(...buildList().filter(Boolean));
   if (!$('#logSheet').hidden) renderLog();
   fx.clear();
@@ -759,26 +779,61 @@ function render({ enter = false } = {}) {
 
 /* ---------- バッジ ---------- */
 
+const badgeSupported = () => 'setAppBadge' in navigator && 'Notification' in window;
+const badgeEnabled = () => safeGet(BADGE_KEY) !== '0';
+
 function updateBadge() {
   if (!('setAppBadge' in navigator)) return;
-  const n = activeTasks().filter((t) => isOverdue(t) || t.due === today()).length;
+  const n = badgeEnabled() ? activeTasks().filter((t) => isOverdue(t) || t.due === today()).length : 0;
   (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
 }
 
 function refreshBadgeStatus() {
+  const sw = $('#badgeSwitch');
   const el = $('#badgeStatus');
-  const btn = $('#badgeBtn');
-  if (!('setAppBadge' in navigator) || !('Notification' in window)) {
-    el.textContent = 'この環境では使えません（ホーム画面に追加したアプリで開いてください）';
-    btn.disabled = true;
+  if (!badgeSupported()) {
+    sw.checked = false;
+    sw.disabled = true;
+    el.textContent = 'ホーム画面に追加したアプリで使えます';
     return;
   }
-  btn.disabled = Notification.permission === 'granted';
-  el.textContent = {
-    granted: '有効です',
-    denied: '許可されていません。iPhone の「設定」→「通知」→「やること」から許可してください。',
-    default: '',
-  }[Notification.permission];
+  sw.disabled = false;
+  sw.checked = badgeEnabled() && Notification.permission === 'granted';
+  el.textContent = Notification.permission === 'denied'
+    ? 'iPhone の「設定」→「通知」→「やること」で許可してください'
+    : '期限切れと今日の合計';
+}
+
+/* ---------- テーマ ---------- */
+
+function currentTheme() {
+  const t = safeGet(THEME_KEY);
+  return THEMES[t] ? t : 'ink';
+}
+
+function applyTheme(name, { animate = false } = {}) {
+  const root = document.documentElement;
+  if (animate && !reduceMotion()) {
+    root.classList.add('theme-switching');
+    setTimeout(() => root.classList.remove('theme-switching'), 400);
+  }
+  root.dataset.theme = name;
+  document.querySelector('meta[name="theme-color"]').setAttribute('content', THEMES[name].bar);
+  document.querySelectorAll('#themePicker .theme-opt').forEach((opt) => {
+    const input = opt.querySelector('input');
+    input.checked = input.value === name;
+    opt.classList.toggle('on', input.checked);
+  });
+}
+
+function refreshExportStatus() {
+  const at = Number(safeGet(EXPORT_KEY));
+  if (!at) {
+    $('#lastExport').textContent = '書き出し：まだありません';
+    return;
+  }
+  const d = new Date(at);
+  $('#lastExport').textContent = `最後の書き出し：${fmtMD(ymd(d))} ${d.getHours()}:${pad(d.getMinutes())}`;
 }
 
 /* ---------- 編集シート ---------- */
@@ -871,11 +926,55 @@ function enableSheetDrag(backdrop) {
   sheet.addEventListener('touchcancel', end);
 }
 
-function syncChips() {
-  const v = $('#fDue').value;
-  document.querySelectorAll('#dueChips .chip').forEach((c) => {
-    const key = c.dataset.due;
-    c.classList.toggle('on', key === 'none' ? !v : presetDue(key) === v && !!v);
+// 期限の日付ボタン（今日から 6 日分。選んだ日がその外なら先頭に出す）
+function renderDayPills() {
+  const td = today();
+  const cur = $('#fDue').value;
+  const days = [];
+  for (let i = 0; i < 6; i++) days.push(addDays(td, i));
+  if (cur && !days.includes(cur)) {
+    days.unshift(cur);
+    days.pop();
+  }
+  $('#dayPills').replaceChildren(...days.map((d) => {
+    const dt = parseYmd(d);
+    const sel = d === cur;
+    return h('button', {
+      type: 'button',
+      class: `day${sel ? ' on' : ''}${d < td ? ' past' : ''}${d === td ? ' is-today' : ''}`,
+      'aria-pressed': sel ? 'true' : 'false',
+      'aria-label': fmtMD(d),
+      onclick: () => {
+        $('#fDue').value = d;
+        syncDue();
+      },
+    },
+    h('span', { class: 'day-dow' }, d === td ? '今日' : WEEK[dt.getDay()]),
+    h('span', { class: 'day-num' }, dt.getDate()));
+  }));
+}
+
+function syncDue() {
+  const due = $('#fDue').value;
+  const time = $('#fTime').value;
+  renderDayPills();
+  $('#timeText').textContent = time || 'なし';
+  $('#otherText').textContent = due ? `${parseYmd(due).getMonth() + 1}/${parseYmd(due).getDate()}` : '選ぶ';
+  $('#noDueBtn').classList.toggle('on', !due);
+  const note = $('#dueNote');
+  const past = !!due && due < today();
+  note.classList.toggle('over', past);
+  note.textContent = !due ? '期限なし（やりたいこと）'
+    : past ? `${diffDays(today(), due)}日過ぎています`
+      : dueLabel({ due, time: time || null });
+}
+
+function syncRepeat() {
+  const v = $('#fRepeat').value;
+  document.querySelectorAll('#repeatSeg button').forEach((b) => {
+    const on = b.dataset.v === v;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
   });
 }
 
@@ -891,7 +990,8 @@ function openEditor(id, preset = {}) {
   $('#fRepeat').value = t.repeat || 'none';
   $('#fStar').checked = !!t.star;
   $('#deleteBtn').hidden = !id;
-  syncChips();
+  syncDue();
+  syncRepeat();
   openSheet($('#editor'));
   if (!id) $('#fTitle').focus();
 }
@@ -961,9 +1061,14 @@ async function exportData() {
   const json = JSON.stringify({ app: 'yarukoto', version: 1, exportedAt: new Date().toISOString(), tasks }, null, 2);
   const name = `yarukoto-${today()}.json`;
   const file = new File([json], name, { type: 'application/json' });
+  const done = () => {
+    safeSet(EXPORT_KEY, String(Date.now()));
+    refreshExportStatus();
+  };
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try {
       await navigator.share({ files: [file] });
+      done();
       return;
     } catch (err) {
       if (err.name === 'AbortError') return;
@@ -975,6 +1080,7 @@ async function exportData() {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+  done();
 }
 
 async function importData(file) {
@@ -1016,13 +1122,16 @@ function showQuickChips(show) {
   $('#quickChips').hidden = !show;
 }
 
-$('#quickForm').addEventListener('submit', (e) => {
-  e.preventDefault();
+function quickAdd() {
   const text = $('#quickInput').value;
   if (!text.trim()) return;
   const t = addTask(resolveQuick(text));
   $('#quickInput').value = '';
   commit(addedMessage(t));
+}
+$('#quickForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  quickAdd();
 });
 $('#quickInput').addEventListener('input', updateHint);
 $('#quickInput').addEventListener('focus', () => showQuickChips(true));
@@ -1038,23 +1147,39 @@ $('#quickChips').addEventListener('pointerdown', (e) => e.preventDefault());
 $('#quickChips').addEventListener('click', (e) => {
   const chip = e.target.closest('.chip');
   if (!chip) return;
+  if (chip.hasAttribute('data-detail')) {
+    openDetailEditor();
+    return;
+  }
   if (chip.hasAttribute('data-star')) quickStar = !quickStar;
   else quickDue = presetDue(chip.dataset.due) || null;
   updateHint();
 });
-$('#detailBtn').addEventListener('click', () => {
+function openDetailEditor() {
   const text = $('#quickInput').value;
-  openEditor(null, text.trim() ? resolveQuick(text) : { due: today() });
+  openEditor(null, text.trim() ? resolveQuick(text) : { due: quickDue !== undefined ? quickDue : today(), star: quickStar });
+}
+// ＋ボタン：文字があればそのまま追加、空なら詳しく入力する画面を開く
+$('#detailBtn').addEventListener('click', () => {
+  if ($('#quickInput').value.trim()) quickAdd();
+  else openDetailEditor();
 });
 
 $('#editForm').addEventListener('submit', saveEditor);
-$('#fDue').addEventListener('input', syncChips);
-$('#dueChips').addEventListener('click', (e) => {
-  const chip = e.target.closest('.chip');
-  if (!chip) return;
-  $('#fDue').value = presetDue(chip.dataset.due);
-  if (!$('#fDue').value) $('#fTime').value = '';
-  syncChips();
+$('#fDue').addEventListener('input', syncDue);
+$('#fDue').addEventListener('change', syncDue);
+$('#fTime').addEventListener('input', syncDue);
+$('#fTime').addEventListener('change', syncDue);
+$('#noDueBtn').addEventListener('click', () => {
+  $('#fDue').value = '';
+  $('#fTime').value = '';
+  syncDue();
+});
+$('#repeatSeg').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  $('#fRepeat').value = b.dataset.v;
+  syncRepeat();
 });
 $('#deleteBtn').addEventListener('click', () => {
   if (!editingId) return;
@@ -1075,12 +1200,25 @@ $('#logBtn').addEventListener('click', () => {
 });
 $('#settingsBtn').addEventListener('click', () => {
   refreshBadgeStatus();
+  refreshExportStatus();
+  applyTheme(currentTheme());
   openSheet($('#settings'));
 });
-$('#badgeBtn').addEventListener('click', async () => {
-  try {
-    await Notification.requestPermission();
-  } catch { /* 古い環境 */ }
+$('#themePicker').addEventListener('change', (e) => {
+  const name = e.target.value;
+  if (!THEMES[name]) return;
+  safeSet(THEME_KEY, name);
+  applyTheme(name, { animate: true });
+});
+$('#badgeSwitch').addEventListener('change', async (e) => {
+  if (!e.target.checked) {
+    safeSet(BADGE_KEY, '0');
+  } else {
+    try {
+      if (Notification.permission !== 'granted') await Notification.requestPermission();
+    } catch { /* 古い環境 */ }
+    safeSet(BADGE_KEY, Notification.permission === 'granted' ? '1' : '0');
+  }
   refreshBadgeStatus();
   updateBadge();
 });
@@ -1169,5 +1307,6 @@ for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
 document.addEventListener('touchmove', (e) => {
   if (e.touches.length > 1) e.preventDefault();
 }, { passive: false });
+applyTheme(currentTheme());
 render({ enter: true });
 updateBadge();
