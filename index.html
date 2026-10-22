@@ -132,6 +132,7 @@
         <button type="button" data-v="daily">毎日</button>
         <button type="button" data-v="weekdays">平日</button>
         <button type="button" data-v="weekly">毎週</button>
+        <button type="button" data-v="biweekly">隔週</button>
         <button type="button" data-v="monthly">毎月</button>
       </div>
       <input type="hidden" id="fRepeat" value="none">
@@ -214,10 +215,19 @@
         <label class="set-row">
           <span class="set-text">
             <span>アイコンに件数を表示</span>
-            <span class="set-sub" id="badgeStatus">期限切れと今日の合計</span>
+            <span class="set-sub" id="badgeStatus">期限切れと、期限が近いタスクの数</span>
           </span>
           <input type="checkbox" id="badgeSwitch" class="switch">
         </label>
+        <div class="set-block">
+          <span class="set-sub">数に含める期限</span>
+          <div class="seg seg-4" id="badgeRangeSeg" role="group" aria-label="アイコンの数に含める期限">
+            <button type="button" data-v="0">今日まで</button>
+            <button type="button" data-v="1">明日まで</button>
+            <button type="button" data-v="3">3日以内</button>
+            <button type="button" data-v="7">1週間</button>
+          </div>
+        </div>
       </div>
     </section>
 

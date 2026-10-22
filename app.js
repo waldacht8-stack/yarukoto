@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '12';
+const APP_VERSION = '13';
 const STORE_KEY = 'yarukoto.tasks.v1';
 const THEME_KEY = 'yarukoto.theme';
 const BADGE_KEY = 'yarukoto.badge';
@@ -15,7 +15,7 @@ const FOLD_KEY = 'yarukoto.folded';
 const BANNER_KEY = 'yarukoto.installBannerClosed';
 const SWIPE_TIP_KEY = 'yarukoto.swipeTipClosed';
 const WEEK = '日月火水木金土';
-const REPEAT_LABEL = { daily: '毎日', weekdays: '平日', weekly: '毎週', monthly: '毎月' };
+const REPEAT_LABEL = { daily: '毎日', weekdays: '平日', weekly: '毎週', biweekly: '隔週', monthly: '毎月' };
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -143,6 +143,9 @@ function stepRepeat(due, repeat, monthDayAnchor) {
       break;
     case 'weekly':
       d.setDate(d.getDate() + 7);
+      break;
+    case 'biweekly':
+      d.setDate(d.getDate() + 14);
       break;
     case 'monthly': {
       const last = new Date(d.getFullYear(), d.getMonth() + 2, 0).getDate();
@@ -885,10 +888,33 @@ function render({ enter = false } = {}) {
 const badgeSupported = () => 'setAppBadge' in navigator && 'Notification' in window;
 const badgeEnabled = () => safeGet(BADGE_KEY) !== '0';
 
+// アイコンの数字に含める範囲（今日から何日先の期限まで数えるか）
+const BADGE_RANGE_KEY = 'yarukoto.badgeRange';
+const BADGE_RANGES = { 0: '今日まで', 1: '明日まで', 3: '3日以内', 7: '1週間以内' };
+function badgeRange() {
+  const v = safeGet(BADGE_RANGE_KEY);
+  return v in BADGE_RANGES ? Number(v) : 1;
+}
+
+// 期限切れと、期限が近いタスクの数
+function badgeCount() {
+  const limit = addDays(today(), badgeRange());
+  return activeTasks().filter((t) => isOverdue(t) || (t.due && t.due <= limit)).length;
+}
+
 function updateBadge() {
   if (!('setAppBadge' in navigator)) return;
-  const n = badgeEnabled() ? activeTasks().filter((t) => isOverdue(t) || t.due === today()).length : 0;
+  const n = badgeEnabled() ? badgeCount() : 0;
   (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
+}
+
+function syncBadgeRange() {
+  const r = String(badgeRange());
+  document.querySelectorAll('#badgeRangeSeg button').forEach((b) => {
+    const on = b.dataset.v === r;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
 }
 
 function refreshBadgeStatus() {
@@ -904,7 +930,7 @@ function refreshBadgeStatus() {
   sw.checked = badgeEnabled() && Notification.permission === 'granted';
   el.textContent = Notification.permission === 'denied'
     ? 'iPhone の「設定」→「通知」→「やること」で許可してください'
-    : '期限切れと今日の合計';
+    : `期限切れと、期限が${BADGE_RANGES[badgeRange()]}のタスク（いま ${badgeCount()} 件）`;
 }
 
 /* ---------- テーマ ---------- */
@@ -1570,6 +1596,7 @@ $('#logBtn').addEventListener('click', () => {
 $('#settingsBtn').addEventListener('click', () => {
   refreshBadgeStatus();
   refreshExportStatus();
+  syncBadgeRange();
   applyTheme(currentTheme());
   openSheet($('#settings'));
 });
@@ -1578,6 +1605,14 @@ $('#themePicker').addEventListener('change', (e) => {
   if (!THEMES[name]) return;
   safeSet(THEME_KEY, name);
   applyTheme(name, { animate: true });
+});
+$('#badgeRangeSeg').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  safeSet(BADGE_RANGE_KEY, b.dataset.v);
+  syncBadgeRange();
+  refreshBadgeStatus();
+  updateBadge();
 });
 $('#badgeSwitch').addEventListener('change', async (e) => {
   if (!e.target.checked) {
