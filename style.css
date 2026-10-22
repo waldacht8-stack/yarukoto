@@ -10,6 +10,7 @@
   --danger-weak: #fdeeec;
   --star: #e0a100;
   --ok: #2f9e5b;
+  --press: #f0f0ec;
   --bar: rgba(255, 255, 255, .78);
   --radius: 14px;
   color-scheme: light dark;
@@ -27,6 +28,7 @@
     --danger-weak: #3a1e1c;
     --star: #ffc53d;
     --ok: #3fbf74;
+    --press: #26262a;
     --bar: rgba(28, 28, 31, .78);
   }
 }
@@ -231,7 +233,7 @@ ul.tasks {
 .ring svg { width: 60px; height: 60px; transform: rotate(-90deg); }
 .ring circle { fill: none; stroke-width: 6; }
 .ring-bg { stroke: var(--line); }
-.ring-fg { stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset .5s ease; }
+.ring-fg { stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset .7s cubic-bezier(.2, .8, .2, 1); }
 .ring span {
   position: absolute;
   inset: 0;
@@ -390,9 +392,8 @@ ul.tasks {
   background: var(--surface);
   border-radius: 18px 18px 0 0;
   padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
-  animation: up .2s ease-out;
+  animation: sheet-up .34s cubic-bezier(.2, .9, .25, 1);
 }
-@keyframes up { from { transform: translateY(40px); opacity: .4; } }
 .grabber { width: 36px; height: 5px; margin: 0 auto 8px; border-radius: 3px; background: var(--line); }
 .sheet-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
 .sheet-head h2 { margin: 0; font-size: 17px; }
@@ -468,3 +469,97 @@ ul.tasks {
 .toast[hidden] { display: none; }
 .toast button { color: #9db4ff; font-weight: 700; padding: 4px 6px; flex: none; }
 .toast button[hidden] { display: none; }
+
+/* ===== アニメーション ===== */
+
+/* 押したときの手応え */
+button { transition: transform .12s ease, background-color .15s, color .15s; }
+button:active { transform: scale(.94); }
+.row:active { background: var(--press); }
+.swiping .row:active { background: var(--surface); }
+
+/* 画面切り替え：上から順にふわっと出す */
+.view-enter > *, .view-enter .task { animation: fade-up .34s cubic-bezier(.2, .8, .2, 1) both; }
+.view-enter .task { animation-delay: calc(min(var(--i, 0), 10) * 24ms + 60ms); }
+@keyframes fade-up { from { opacity: 0; transform: translateY(10px); } }
+
+/* 追加・元に戻したタスク */
+.task.is-new { animation: new-in .45s cubic-bezier(.2, .8, .2, 1) both; }
+.task.is-new .row { animation: flash 1.4s ease-out; }
+@keyframes new-in { from { opacity: 0; transform: translateY(-10px) scale(.98); } }
+@keyframes flash { 0%, 35% { background: var(--accent-weak); } }
+
+/* チェック：ぽんと弾んで粒が飛ぶ */
+.check.checking { animation: pop .32s cubic-bezier(.3, 1.6, .5, 1); }
+.check.checking::after { animation: tick .22s ease-out; }
+@keyframes pop { 40% { transform: scale(1.28); } }
+@keyframes tick { from { transform: rotate(45deg) scale(0); } }
+.completing .title { color: var(--muted); transition: color .2s; }
+.burst { position: absolute; left: 50%; top: 50%; width: 0; height: 0; pointer-events: none; }
+.burst i {
+  position: absolute;
+  left: -3px;
+  top: -3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  transform: rotate(var(--a)) translateY(0);
+  animation: burst .55s cubic-bezier(.2, .8, .3, 1) forwards;
+}
+.burst i:nth-child(3n + 1) { background: var(--star); }
+.burst i:nth-child(3n + 2) { background: var(--ok); }
+@keyframes burst { to { transform: rotate(var(--a)) translateY(var(--d)) scale(.2); opacity: 0; } }
+
+/* 重要の星 */
+.star-pop .star.on { animation: star-pop .45s cubic-bezier(.3, 1.6, .5, 1); }
+@keyframes star-pop { 0% { transform: scale(.4); } 50% { transform: scale(1.4) rotate(-14deg); } }
+
+/* 進み具合：全部終わったら弾む */
+.ring { overflow: visible; }
+.celebrate .ring { animation: ring-pulse .6s .4s cubic-bezier(.3, 1.6, .5, 1); }
+.celebrate .summary-main { animation: fade-up .4s .5s both; }
+.all-done .ring-fg { stroke: var(--ok); }
+@keyframes ring-pulse { 50% { transform: scale(1.15); } }
+
+/* タブ */
+.tabs button.active .ico { animation: tab-pop .35s cubic-bezier(.3, 1.6, .5, 1); }
+@keyframes tab-pop { 40% { transform: scale(1.2) translateY(-2px); } }
+.count.bump { animation: bump .4s cubic-bezier(.3, 1.6, .5, 1); }
+@keyframes bump { 40% { transform: scale(1.35); } }
+
+/* 期限ボタンの出現 */
+.quick-chips:not([hidden]) .chip { animation: fade-up .25s cubic-bezier(.2, .8, .2, 1) both; }
+.quick-chips .chip:nth-child(2) { animation-delay: 20ms; }
+.quick-chips .chip:nth-child(3) { animation-delay: 40ms; }
+.quick-chips .chip:nth-child(4) { animation-delay: 60ms; }
+.quick-chips .chip:nth-child(5) { animation-delay: 80ms; }
+.quick-chips .chip:nth-child(6) { animation-delay: 100ms; }
+.hint { animation: fade-up .2s ease-out; }
+
+/* シート：下からせり上がり、閉じるときは下へ */
+.backdrop { animation: fade-in .2s ease-out; }
+.backdrop.closing { animation: fade-out .2s ease-in forwards; }
+.backdrop.closing .sheet { animation: sheet-down .2s ease-in forwards; }
+@keyframes sheet-up { from { transform: translateY(100%); } }
+@keyframes sheet-down { to { transform: translateY(100%); } }
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes fade-out { to { opacity: 0; } }
+
+/* トースト */
+.toast.show { animation: toast-in .3s cubic-bezier(.2, .9, .3, 1.2); }
+.toast.leaving { animation: toast-out .18s ease-in forwards; }
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 16px) scale(.96); } }
+@keyframes toast-out { to { opacity: 0; transform: translate(-50%, 8px); } }
+
+/* 2 週間カレンダー */
+.day { transition: transform .12s ease, background-color .2s; }
+
+/* 動きを減らす設定の人には止める */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-delay: 0ms !important;
+    transition-duration: .01ms !important;
+  }
+}

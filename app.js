@@ -17,6 +17,15 @@ let toastTimer = null;
 // クイック入力の下のボタンで選んだ期限（undefined ならタブごとの既定）と重要フラグ
 let quickDue;
 let quickStar = false;
+// 次の描画で特定のタスクに付けるアニメーション用クラス（id → クラス）
+const fx = new Map();
+let lastRatio = null;
+let lastRemain = null;
+let lastCount = null;
+
+function mark(id, cls) {
+  fx.set(id, `${fx.get(id) || ''} ${cls}`);
+}
 
 /* ---------- 保存 ---------- */
 
@@ -163,6 +172,7 @@ function addTask(fields) {
   };
   if (t.repeat === 'monthly' && t.due) t.monthDay = parseYmd(t.due).getDate();
   tasks.push(t);
+  mark(t.id, 'is-new');
   return t;
 }
 
@@ -207,6 +217,7 @@ function toggleStar(id) {
   const t = findTask(id);
   if (!t) return;
   t.star = !t.star;
+  if (t.star) mark(t.id, 'star-pop');
   commit();
 }
 
@@ -313,6 +324,37 @@ function animateOut(el, delay = 0) {
 }
 
 // 期限が今日以前なら「明日へ」、それ以外は「今日へ」
+// チェック時に小さな粒を飛ばす
+function burst(el, { count = 8, dist = 20 } = {}) {
+  if (reduceMotion()) return;
+  const b = h('span', { class: 'burst', style: `--d:${-dist}px` });
+  for (let i = 0; i < count; i++) b.append(h('i', { style: `--a:${(360 / count) * i}deg` }));
+  el.append(b);
+  setTimeout(() => b.remove(), 700);
+}
+
+// 数字をなめらかに増減させる
+function countUp(el, from, to) {
+  if (reduceMotion() || from === to) {
+    el.textContent = to;
+    return;
+  }
+  const start = performance.now();
+  let finished = false;
+  const step = (now) => {
+    if (finished) return;
+    const p = Math.min(1, (now - start) / 600);
+    el.textContent = Math.round(from + (to - from) * (1 - (1 - p) ** 3));
+    if (p < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+  // 描画が止まっていても最終的な値にはしておく
+  setTimeout(() => {
+    finished = true;
+    el.textContent = to;
+  }, 650);
+}
+
 function swipeLeftAction(t) {
   return t.due && t.due <= today()
     ? { label: '明日へ', due: addDays(today(), 1) }
@@ -387,18 +429,23 @@ function taskItem(t) {
 
   const stop = (fn) => (e) => { e.stopPropagation(); fn(); };
   const left = swipeLeftAction(t);
-  const li = h('li', { class: `task${over ? ' is-over' : ''}${t.done ? ' is-done' : ''}` });
-  const complete = (delay) => animateOut(li, delay).then(() => completeTask(t.id));
-  const moveOut = (due) => animateOut(li).then(() => moveTasks([t.id], due));
+  const li = h('li', { class: `task${over ? ' is-over' : ''}${t.done ? ' is-done' : ''}${fx.get(t.id) || ''}` });
+  const complete = (delay) => {
+    li.classList.add('completing');
+    return animateOut(li, delay).then(() => completeTask(t.id));
+  };
+  const restore = (delay) => animateOut(li, delay).then(() => uncompleteTask(t.id));
+  const moveOut = (due, delay = 0) => animateOut(li, delay).then(() => moveTasks([t.id], due));
 
   const check = h('button', {
     type: 'button',
     class: 'check',
     'aria-label': t.done ? '未完了に戻す' : '完了にする',
     onclick: stop(() => {
-      if (t.done) return uncompleteTask(t.id);
+      if (t.done) return restore(0);
       check.classList.add('checking');
-      complete(180);
+      burst(check);
+      complete(320);
     }),
   });
 
@@ -429,8 +476,8 @@ function taskItem(t) {
     row,
   );
   enableSwipe(li, row, {
-    onRight: t.done ? () => uncompleteTask(t.id) : () => complete(0),
-    onLeft: t.done ? null : () => moveOut(left.due),
+    onRight: t.done ? () => restore(120) : () => complete(120),
+    onLeft: t.done ? null : () => moveOut(left.due, 120),
   });
   return li;
 }
@@ -440,7 +487,11 @@ function section(title, items, { danger = false, action = null, id = null, count
     h('div', { class: 'section-head' },
       h('h2', {}, title, count ? h('span', { class: 'section-count' }, items.length) : null),
       action),
-    h('ul', { class: 'tasks' }, items.map(taskItem)),
+    h('ul', { class: 'tasks' }, items.map((t, i) => {
+      const li = taskItem(t);
+      li.style.setProperty('--i', i);
+      return li;
+    })),
   );
 }
 
@@ -452,13 +503,25 @@ function todaySummary(overdue, todays) {
   const total = remain + doneToday;
   if (!total) return null;
   const ratio = doneToday / total;
+  const from = lastRatio ?? 0;
   const r = 24;
   const c = 2 * Math.PI * r;
   const ring = h('div', { class: 'ring' });
   ring.innerHTML = `<svg viewBox="0 0 60 60" aria-hidden="true"><circle cx="30" cy="30" r="${r}" class="ring-bg"/>`
-    + `<circle cx="30" cy="30" r="${r}" class="ring-fg" stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${(c * (1 - ratio)).toFixed(1)}"/></svg>`
-    + `<span>${Math.round(ratio * 100)}<small>%</small></span>`;
-  return h('div', { class: 'summary' },
+    + `<circle cx="30" cy="30" r="${r}" class="ring-fg" stroke-dasharray="${c.toFixed(1)}" style="stroke-dashoffset:${(c * (1 - from)).toFixed(1)}"/></svg>`
+    + `<span><b>${Math.round(from * 100)}</b><small>%</small></span>`;
+  // 前回の値から今回の値までリングと数字を動かす
+  const fg = ring.querySelector('.ring-fg');
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    fg.style.strokeDashoffset = (c * (1 - ratio)).toFixed(1);
+  }));
+  countUp(ring.querySelector('b'), Math.round(from * 100), Math.round(ratio * 100));
+  const celebrate = lastRemain > 0 && remain === 0;
+  lastRatio = ratio;
+  lastRemain = remain;
+  if (celebrate) setTimeout(() => burst(ring, { count: 14, dist: 44 }), 450);
+
+  return h('div', { class: `summary${celebrate ? ' celebrate' : ''}${remain ? '' : ' all-done'}` },
     ring,
     h('div', { class: 'summary-text' },
       h('div', { class: 'summary-main' }, remain ? `あと ${remain} 件` : '今日の分はすべて完了！'),
@@ -605,21 +668,37 @@ function updateCounts() {
   const overdue = activeTasks().filter(isOverdue).length;
   const todays = activeTasks().filter(isDueToday).length;
   const ct = $('#countToday');
-  ct.textContent = overdue + todays || '';
+  const n = overdue + todays;
+  ct.textContent = n || '';
   ct.classList.toggle('danger', overdue > 0);
+  if (lastCount !== null && n !== lastCount) {
+    ct.classList.remove('bump');
+    void ct.offsetWidth; // アニメーションを最初からやり直す
+    ct.classList.add('bump');
+  }
+  lastCount = n;
   $('#countUpcoming').textContent = '';
   $('#countSomeday').textContent = '';
 }
 
-function render() {
+let enterTimer = null;
+
+function render({ enter = false } = {}) {
   if (!VIEWS[view]) view = 'today';
+  const list = $('#list');
+  if (enter && !reduceMotion()) {
+    list.classList.add('view-enter');
+    clearTimeout(enterTimer);
+    enterTimer = setTimeout(() => list.classList.remove('view-enter'), 700);
+  }
   $('#todayLabel').textContent = fmtLong(today());
   $('#viewTitle').textContent = VIEWS[view].title;
   $('#quickInput').placeholder = VIEWS[view].placeholder;
   document.querySelectorAll('.tabs button').forEach((b) => {
     b.classList.toggle('active', b.dataset.view === view);
   });
-  $('#list').replaceChildren(...VIEWS[view].build().filter(Boolean));
+  list.replaceChildren(...VIEWS[view].build().filter(Boolean));
+  fx.clear();
   updateCounts();
   updateHint();
 }
@@ -650,11 +729,24 @@ function refreshBadgeStatus() {
 
 /* ---------- 編集シート ---------- */
 
+const closeTimers = new WeakMap();
+
 function openSheet(el) {
+  clearTimeout(closeTimers.get(el));
+  el.classList.remove('closing');
   el.hidden = false;
 }
 function closeSheet(el) {
-  el.hidden = true;
+  if (el.hidden) return;
+  if (reduceMotion()) {
+    el.hidden = true;
+    return;
+  }
+  el.classList.add('closing');
+  closeTimers.set(el, setTimeout(() => {
+    el.hidden = true;
+    el.classList.remove('closing');
+  }, 200));
 }
 
 function syncChips() {
@@ -718,12 +810,27 @@ function addedMessage(t) {
 /* ---------- トースト ---------- */
 
 function toast(msg, snap) {
+  const el = $('#toast');
   undoSnapshot = snap || null;
   $('#toastMsg').textContent = msg;
   $('#toastUndo').hidden = !snap;
-  $('#toast').hidden = false;
+  el.classList.remove('leaving', 'show');
+  el.hidden = false;
+  void el.offsetWidth; // 続けて出したときも登場アニメーションをやり直す
+  el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { $('#toast').hidden = true; undoSnapshot = null; }, 4000);
+  toastTimer = setTimeout(hideToast, 4000);
+}
+
+function hideToast() {
+  const el = $('#toast');
+  undoSnapshot = null;
+  clearTimeout(toastTimer);
+  el.classList.add('leaving');
+  toastTimer = setTimeout(() => {
+    el.hidden = true;
+    el.classList.remove('leaving');
+  }, reduceMotion() ? 0 : 180);
 }
 
 /* ---------- バックアップ ---------- */
@@ -792,7 +899,7 @@ function setView(next) {
   quickDue = undefined;
   quickStar = false;
   safeSet(VIEW_KEY, view);
-  render();
+  render({ enter: true });
   window.scrollTo(0, 0);
 }
 
@@ -869,9 +976,13 @@ $('#importFile').addEventListener('change', (e) => {
 
 $('#toastUndo').addEventListener('click', () => {
   if (!undoSnapshot) return;
+  // 元に戻ったタスクを光らせる
+  const before = new Map(tasks.map((t) => [t.id, JSON.stringify(t)]));
   tasks = JSON.parse(undoSnapshot);
-  undoSnapshot = null;
-  $('#toast').hidden = true;
+  for (const t of tasks) {
+    if (before.get(t.id) !== JSON.stringify(t)) mark(t.id, 'is-new');
+  }
+  hideToast();
   persist();
   render();
 });
@@ -896,5 +1007,7 @@ if ('serviceWorker' in navigator) {
 if (navigator.storage && navigator.storage.persist) {
   navigator.storage.persist().catch(() => {});
 }
-render();
+// iOS Safari で :active（押したときの見た目）を効かせるため
+document.addEventListener('touchstart', () => {}, { passive: true });
+render({ enter: true });
 updateBadge();
