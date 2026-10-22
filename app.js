@@ -1,5 +1,6 @@
 'use strict';
 
+const APP_VERSION = '7';
 const STORE_KEY = 'yarukoto.tasks.v1';
 const FOLD_KEY = 'yarukoto.folded';
 const BANNER_KEY = 'yarukoto.installBannerClosed';
@@ -802,6 +803,74 @@ function closeSheet(el) {
   }, 200));
 }
 
+// シートを下にスワイプして閉じる。中身が上までスクロールされているときだけ反応する
+function enableSheetDrag(backdrop) {
+  const sheet = backdrop.querySelector('.sheet');
+  let y0 = null;
+  let t0 = 0;
+  let dy = 0;
+  let dragging = false;
+
+  const resetStyles = () => {
+    sheet.style.transition = '';
+    sheet.style.transform = '';
+    backdrop.style.backgroundColor = '';
+  };
+
+  sheet.addEventListener('touchstart', (e) => {
+    y0 = null;
+    if (e.touches.length !== 1 || sheet.scrollTop > 0) return;
+    if (e.target.closest('input, textarea, select')) return;
+    y0 = e.touches[0].clientY;
+    t0 = Date.now();
+    dy = 0;
+    dragging = false;
+  }, { passive: true });
+
+  sheet.addEventListener('touchmove', (e) => {
+    if (y0 == null) return;
+    const d = e.touches[0].clientY - y0;
+    if (!dragging) {
+      if (d < -6) y0 = null; // 上方向はふつうのスクロールに任せる
+      if (d < 6) return;
+      dragging = true;
+      sheet.classList.add('dragging');
+    }
+    e.preventDefault();
+    dy = Math.max(0, d);
+    sheet.style.transform = `translateY(${dy}px)`;
+    backdrop.style.backgroundColor = `rgba(0, 0, 0, ${(0.35 * Math.max(0, 1 - dy / sheet.offsetHeight)).toFixed(3)})`;
+  }, { passive: false });
+
+  const end = () => {
+    if (y0 == null) return;
+    y0 = null;
+    if (!dragging) return;
+    dragging = false;
+    sheet.classList.remove('dragging');
+    const fast = dy / Math.max(1, Date.now() - t0) > 0.5;
+    if (dy > 120 || (fast && dy > 30)) {
+      // 指を離した位置から下へ流して閉じる
+      sheet.style.transition = 'transform .2s ease-in';
+      sheet.style.transform = 'translateY(100%)';
+      backdrop.style.transition = 'background-color .2s';
+      backdrop.style.backgroundColor = 'rgba(0, 0, 0, 0)';
+      closeTimers.set(backdrop, setTimeout(() => {
+        backdrop.hidden = true;
+        backdrop.style.transition = '';
+        resetStyles();
+      }, 200));
+    } else {
+      sheet.style.transition = 'transform .25s cubic-bezier(.2, .9, .25, 1)';
+      sheet.style.transform = '';
+      backdrop.style.backgroundColor = '';
+      setTimeout(resetStyles, 260);
+    }
+  };
+  sheet.addEventListener('touchend', end);
+  sheet.addEventListener('touchcancel', end);
+}
+
 function syncChips() {
   const v = $('#fDue').value;
   document.querySelectorAll('#dueChips .chip').forEach((c) => {
@@ -1017,7 +1086,8 @@ $('#badgeBtn').addEventListener('click', async () => {
 });
 // 1 行 1 タスクで登録する。日付のない行は期限なし（やりたいこと）にする
 function bulkAdd(text) {
-  const lines = text.split('\n')
+  // コピー元によって改行コードが違うので、どれでも 1 行として扱う
+  const lines = text.split(/\r\n|[\r\n\u2028\u2029]/)
     .map((l) => l.replace(/^\s*(?:[-・*•]|\d+[.)])\s*/, '').trim())
     .filter(Boolean);
   if (!lines.length) return 0;
@@ -1032,10 +1102,23 @@ function bulkAdd(text) {
 }
 
 $('#bulkBtn').addEventListener('click', () => {
-  if (!bulkAdd($('#bulkText').value)) return;
+  if (!bulkAdd($('#bulkText').value)) {
+    toast('追加するテキストを貼り付けてください');
+    return;
+  }
   $('#bulkText').value = '';
   closeSheet($('#settings'));
+  window.scrollTo(0, 0);
 });
+// 上の入力欄に複数行を貼り付けたときも、1 行ずつ登録する
+$('#quickInput').addEventListener('paste', (e) => {
+  const text = (e.clipboardData && e.clipboardData.getData('text')) || '';
+  if (!/[\r\n\u2028\u2029]/.test(text.trim())) return;
+  e.preventDefault();
+  bulkAdd(text);
+});
+$('#appVersion').textContent = `バージョン ${APP_VERSION}`;
+document.querySelectorAll('.backdrop').forEach(enableSheetDrag);
 $('#exportBtn').addEventListener('click', exportData);
 $('#importBtn').addEventListener('click', () => $('#importFile').click());
 $('#importFile').addEventListener('change', (e) => {

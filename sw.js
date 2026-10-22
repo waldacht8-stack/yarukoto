@@ -1,6 +1,6 @@
 // オフラインでも開けるように、アプリ本体をキャッシュする。
-// ファイルを更新したら CACHE の番号を上げると、次回起動時に新しい版へ切り替わる。
-const CACHE = 'yarukoto-v6';
+// ファイルを更新したら CACHE の番号（と app.js の APP_VERSION）を上げる。
+const CACHE = 'yarukoto-v7';
 const ASSETS = [
   './',
   './index.html',
@@ -24,19 +24,24 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-// キャッシュを先に返し、裏でネットワークから最新を取ってキャッシュを更新する
+function fetchWithTimeout(url, ms) {
+  return Promise.race([
+    fetch(url, { cache: 'no-cache' }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
+  ]);
+}
+
+// まずネットワークから最新を取り（更新がすぐ反映される）、つながらないときだけキャッシュを使う
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;
-  e.respondWith(
-    caches.open(CACHE).then(async (cache) => {
-      const cached = await cache.match(e.request, { ignoreSearch: true });
-      const network = fetch(e.request)
-        .then((res) => {
-          if (res.ok) cache.put(e.request, res.clone());
-          return res;
-        })
-        .catch(() => cached);
-      return cached || network;
-    }),
-  );
+  e.respondWith((async () => {
+    const cache = await caches.open(CACHE);
+    try {
+      const res = await fetchWithTimeout(e.request.url, 4000);
+      if (res.ok) cache.put(e.request, res.clone());
+      return res;
+    } catch {
+      return (await cache.match(e.request, { ignoreSearch: true })) || Response.error();
+    }
+  })());
 });
