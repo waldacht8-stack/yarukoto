@@ -366,6 +366,7 @@ ul.tasks {
 .setting h3 { margin: 0 0 6px; font-size: 15px; }
 .setting p { margin: 0 0 10px; font-size: 14px; color: var(--muted); line-height: 1.6; }
 .setting .btn { width: 100%; }
+.setting .bulk { min-height: 110px; margin-bottom: 10px; }
 .setting .status { margin: 8px 0 0; font-size: 13px; }
 .setting .status:empty { display: none; }
 .tips { margin: 0; padding-left: 18px; font-size: 14px; line-height: 1.9; color: var(--muted); }

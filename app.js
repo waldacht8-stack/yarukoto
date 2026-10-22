@@ -1015,6 +1015,27 @@ $('#badgeBtn').addEventListener('click', async () => {
   refreshBadgeStatus();
   updateBadge();
 });
+// 1 行 1 タスクで登録する。日付のない行は期限なし（やりたいこと）にする
+function bulkAdd(text) {
+  const lines = text.split('\n')
+    .map((l) => l.replace(/^\s*(?:[-・*•]|\d+[.)])\s*/, '').trim())
+    .filter(Boolean);
+  if (!lines.length) return 0;
+  const snap = JSON.stringify(tasks);
+  for (const line of lines) {
+    const p = parseQuick(line);
+    const due = p.due || (p.time ? today() : null);
+    addTask({ title: p.title, due, time: p.time || null, star: !!p.star });
+  }
+  commit(`${lines.length} 件を追加しました`, snap);
+  return lines.length;
+}
+
+$('#bulkBtn').addEventListener('click', () => {
+  if (!bulkAdd($('#bulkText').value)) return;
+  $('#bulkText').value = '';
+  closeSheet($('#settings'));
+});
 $('#exportBtn').addEventListener('click', exportData);
 $('#importBtn').addEventListener('click', () => $('#importFile').click());
 $('#importFile').addEventListener('change', (e) => {
