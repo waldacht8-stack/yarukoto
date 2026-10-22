@@ -1,0 +1,699 @@
+'use strict';
+
+const STORE_KEY = 'yarukoto.tasks.v1';
+const VIEW_KEY = 'yarukoto.view';
+const BANNER_KEY = 'yarukoto.installBannerClosed';
+const WEEK = '日月火水木金土';
+const REPEAT_LABEL = { daily: '毎日', weekdays: '平日', weekly: '毎週', monthly: '毎月' };
+
+const $ = (sel) => document.querySelector(sel);
+
+let tasks = loadTasks();
+let view = safeGet(VIEW_KEY) || 'today';
+let editingId = null;
+let undoSnapshot = null;
+let toastTimer = null;
+
+/* ---------- 保存 ---------- */
+
+function safeGet(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function safeSet(key, value) {
+  try { localStorage.setItem(key, value); return true; } catch { return false; }
+}
+function loadTasks() {
+  try {
+    const v = JSON.parse(localStorage.getItem(STORE_KEY));
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+function persist() {
+  if (!safeSet(STORE_KEY, JSON.stringify(tasks))) toast('保存に失敗しました');
+  updateBadge();
+}
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+/* ---------- 日付 ---------- */
+
+function pad(n) { return String(n).padStart(2, '0'); }
+function ymd(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
+function parseYmd(s) {
+  const [y, m, d] = s.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+function today() { return ymd(new Date()); }
+function addDays(s, n) {
+  const d = parseYmd(s);
+  d.setDate(d.getDate() + n);
+  return ymd(d);
+}
+function diffDays(a, b) { return Math.round((parseYmd(a) - parseYmd(b)) / 86400000); }
+function nowHM() {
+  const n = new Date();
+  return `${pad(n.getHours())}:${pad(n.getMinutes())}`;
+}
+function fmtMD(s) {
+  const d = parseYmd(s);
+  return `${d.getMonth() + 1}/${d.getDate()}(${WEEK[d.getDay()]})`;
+}
+function fmtLong(s) {
+  const d = parseYmd(s);
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日（${WEEK[d.getDay()]}）`;
+}
+// 次の指定曜日。includeToday なら今日も候補に含める
+function nextDow(dow, includeToday) {
+  const td = today();
+  let diff = (dow - parseYmd(td).getDay() + 7) % 7;
+  if (diff === 0 && !includeToday) diff = 7;
+  return addDays(td, diff);
+}
+function monthDay(m, d) {
+  if (m < 1 || m > 12 || d < 1 || d > 31) return null;
+  const y = new Date().getFullYear();
+  if (new Date(y, m - 1, d).getMonth() !== m - 1) return null;
+  const s = `${y}-${pad(m)}-${pad(d)}`;
+  return s < today() ? `${y + 1}-${pad(m)}-${pad(d)}` : s;
+}
+function presetDue(key) {
+  switch (key) {
+    case 'today': return today();
+    case 'tomorrow': return addDays(today(), 1);
+    case 'weekend': return nextDow(6, true);
+    case 'nextweek': return nextDow(1, false);
+    default: return '';
+  }
+}
+
+/* ---------- タスクの状態 ---------- */
+
+function isOverdue(t) {
+  if (t.done || !t.due) return false;
+  const td = today();
+  if (t.due < td) return true;
+  return t.due === td && !!t.time && t.time < nowHM();
+}
+function isDueToday(t) { return !t.done && t.due === today() && !isOverdue(t); }
+function activeTasks() { return tasks.filter((t) => !t.done); }
+function cmpTask(a, b) {
+  return (a.due || '9999').localeCompare(b.due || '9999')
+    || (b.star ? 1 : 0) - (a.star ? 1 : 0)
+    || (a.time || '99').localeCompare(b.time || '99')
+    || a.createdAt - b.createdAt;
+}
+function dueLabel(t) {
+  const diff = diffDays(t.due, today());
+  let label;
+  if (diff < 0) label = diff === -1 ? '昨日' : `${-diff}日超過 · ${fmtMD(t.due)}`;
+  else if (diff === 0) label = '今日';
+  else if (diff === 1) label = '明日';
+  else if (diff < 7) label = `${WEEK[parseYmd(t.due).getDay()]}曜`;
+  else label = fmtMD(t.due);
+  return t.time ? `${label} ${t.time}` : label;
+}
+function stepRepeat(due, repeat, monthDayAnchor) {
+  const d = parseYmd(due);
+  switch (repeat) {
+    case 'daily':
+      d.setDate(d.getDate() + 1);
+      break;
+    case 'weekdays':
+      do { d.setDate(d.getDate() + 1); } while (d.getDay() === 0 || d.getDay() === 6);
+      break;
+    case 'weekly':
+      d.setDate(d.getDate() + 7);
+      break;
+    case 'monthly': {
+      const last = new Date(d.getFullYear(), d.getMonth() + 2, 0).getDate();
+      return ymd(new Date(d.getFullYear(), d.getMonth() + 1, Math.min(monthDayAnchor, last)));
+    }
+  }
+  return ymd(d);
+}
+// 遅れて完了しても、次回は必ず明日以降になるように進める
+function nextDue(t) {
+  const td = today();
+  const anchor = t.monthDay || parseYmd(t.due || td).getDate();
+  let d = t.due || td;
+  do { d = stepRepeat(d, t.repeat, anchor); } while (d <= td);
+  return d;
+}
+
+/* ---------- 操作 ---------- */
+
+function findTask(id) { return tasks.find((t) => t.id === id); }
+function commit(msg, snap) {
+  persist();
+  render();
+  if (msg) toast(msg, snap);
+}
+
+function addTask(fields) {
+  const t = {
+    id: uid(), title: '', note: '', due: null, time: null, repeat: 'none',
+    star: false, done: false, doneAt: null, createdAt: Date.now(), ...fields,
+  };
+  if (t.repeat === 'monthly' && t.due) t.monthDay = parseYmd(t.due).getDate();
+  tasks.push(t);
+  return t;
+}
+
+function completeTask(id) {
+  const t = findTask(id);
+  if (!t) return;
+  const snap = JSON.stringify(tasks);
+  if (t.repeat && t.repeat !== 'none') {
+    // 完了履歴を残しつつ、本体は次回の期限へ
+    tasks.push({ ...t, id: uid(), repeat: 'none', done: true, doneAt: Date.now() });
+    t.due = nextDue(t);
+    commit(`完了！ 次回は ${fmtMD(t.due)}`, snap);
+  } else {
+    t.done = true;
+    t.doneAt = Date.now();
+    commit('完了しました', snap);
+  }
+}
+
+function uncompleteTask(id) {
+  const t = findTask(id);
+  if (!t) return;
+  t.done = false;
+  t.doneAt = null;
+  commit('未完了に戻しました');
+}
+
+function moveTasks(ids, due) {
+  const snap = JSON.stringify(tasks);
+  for (const id of ids) {
+    const t = findTask(id);
+    if (!t) continue;
+    t.due = due;
+    // 今日に移しても時刻が過ぎていたら期限切れのままになるので時刻を外す
+    if (due === today() && t.time && t.time < nowHM()) t.time = null;
+  }
+  const where = due === today() ? '今日' : due === addDays(today(), 1) ? '明日' : fmtMD(due);
+  commit(`${ids.length > 1 ? `${ids.length}件を` : ''}${where}に移動しました`, snap);
+}
+
+function toggleStar(id) {
+  const t = findTask(id);
+  if (!t) return;
+  t.star = !t.star;
+  commit();
+}
+
+function deleteTask(id) {
+  const snap = JSON.stringify(tasks);
+  tasks = tasks.filter((t) => t.id !== id);
+  commit('削除しました', snap);
+}
+
+function clearDone() {
+  const n = tasks.filter((t) => t.done).length;
+  if (!n) return;
+  const snap = JSON.stringify(tasks);
+  tasks = tasks.filter((t) => !t.done);
+  commit(`完了済み ${n} 件を削除しました`, snap);
+}
+
+/* ---------- クイック入力の解析 ---------- */
+
+function toHalfWidth(s) {
+  return s.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+}
+
+function parseToken(raw) {
+  const tok = toHalfWidth(raw);
+  const td = today();
+  const words = { 今日: 0, きょう: 0, 明日: 1, あした: 1, 明後日: 2, あさって: 2 };
+  if (tok in words) return { due: addDays(td, words[tok]) };
+  if (tok === '週末') return { due: nextDow(6, true) };
+  if (tok === '来週') return { due: nextDow(1, false) };
+  if (tok === '!' || tok === '！') return { star: true };
+  let m;
+  if ((m = tok.match(/^([日月火水木金土])曜日?$/))) return { due: nextDow(WEEK.indexOf(m[1]), false) };
+  if ((m = tok.match(/^(\d{1,2})[/／](\d{1,2})$/))) {
+    const d = monthDay(+m[1], +m[2]);
+    if (d) return { due: d };
+  }
+  if ((m = tok.match(/^(\d{1,2})[:：](\d{2})$/)) && +m[1] < 24 && +m[2] < 60) {
+    return { time: `${pad(+m[1])}:${m[2]}` };
+  }
+  if ((m = tok.match(/^(\d{1,2})時(半)?$/)) && +m[1] < 24) {
+    return { time: `${pad(+m[1])}:${m[2] ? '30' : '00'}` };
+  }
+  return null;
+}
+
+function parseQuick(text) {
+  const rest = [];
+  const out = {};
+  for (const tok of text.trim().split(/\s+/)) {
+    const r = tok && parseToken(tok);
+    if (r) Object.assign(out, r);
+    else if (tok) rest.push(tok);
+  }
+  // 日付の言葉だけを入力した場合はそのままタイトルにする
+  if (!rest.length) return { title: text.trim() };
+  return { title: rest.join(' '), ...out };
+}
+
+function defaultDueForView() {
+  if (view === 'someday') return null;
+  if (view === 'upcoming') return addDays(today(), 1);
+  return today();
+}
+
+function resolveQuick(text) {
+  const p = parseQuick(text);
+  let due = p.due !== undefined ? p.due : defaultDueForView();
+  if (!due && p.time) due = today();
+  return { title: p.title, due, time: p.time || null, star: !!p.star };
+}
+
+/* ---------- 描画 ---------- */
+
+function h(tag, attrs = {}, ...children) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k === 'class') el.className = v;
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const c of children.flat()) {
+    if (c == null || c === false) continue;
+    el.append(c instanceof Node ? c : String(c));
+  }
+  return el;
+}
+
+function taskItem(t) {
+  const over = isOverdue(t);
+  const meta = [];
+  if (t.due) {
+    const cls = over ? 'due over' : t.due === today() ? 'due today' : 'due';
+    meta.push(h('span', { class: cls }, dueLabel(t)));
+  }
+  if (t.repeat && t.repeat !== 'none') meta.push(h('span', {}, `↻ ${REPEAT_LABEL[t.repeat]}`));
+  if (t.note) meta.push(h('span', { class: 'note' }, t.note.split('\n')[0]));
+
+  const stop = (fn) => (e) => { e.stopPropagation(); fn(); };
+  const check = h('button', {
+    type: 'button',
+    class: 'check',
+    'aria-label': t.done ? '未完了に戻す' : '完了にする',
+    onclick: stop(() => {
+      if (t.done) return uncompleteTask(t.id);
+      check.classList.add('checking');
+      setTimeout(() => completeTask(t.id), 220);
+    }),
+  });
+
+  return h('li', { class: `task${over ? ' is-over' : ''}${t.done ? ' is-done' : ''}` },
+    check,
+    h('div', { class: 'body', onclick: () => openEditor(t.id) },
+      h('div', { class: 'title' }, t.title),
+      meta.length ? h('div', { class: 'meta' }, meta) : null,
+      over ? h('div', { class: 'quick-actions' },
+        h('button', { type: 'button', class: 'pill', onclick: stop(() => moveTasks([t.id], today())) }, '今日やる'),
+        h('button', { type: 'button', class: 'pill', onclick: stop(() => moveTasks([t.id], addDays(today(), 1))) }, '明日に'),
+        h('button', { type: 'button', class: 'pill', onclick: stop(() => openEditor(t.id)) }, '日付を選ぶ'),
+      ) : null,
+    ),
+    t.done ? null : h('button', {
+      type: 'button',
+      class: `star${t.star ? ' on' : ''}`,
+      'aria-label': t.star ? '重要を外す' : '重要にする',
+      onclick: stop(() => toggleStar(t.id)),
+    }, t.star ? '★' : '☆'),
+  );
+}
+
+function section(title, items, { danger = false, action = null } = {}) {
+  return h('section', { class: `section${danger ? ' danger' : ''}` },
+    h('div', { class: 'section-head' }, h('h2', {}, title), action),
+    h('ul', { class: 'tasks' }, items.map(taskItem)),
+  );
+}
+
+function empty(strong, text) {
+  return h('div', { class: 'empty' }, h('strong', {}, strong), text);
+}
+
+function installBanner() {
+  const standalone = window.navigator.standalone || matchMedia('(display-mode: standalone)').matches;
+  if (standalone || safeGet(BANNER_KEY)) return null;
+  const el = h('div', { class: 'banner' },
+    h('p', {}, 'Safari の共有ボタン → 「ホーム画面に追加」で、アプリとして使えます。データが消えにくくなるので、先に追加してから使うのがおすすめです。'),
+    h('button', {
+      type: 'button', class: 'text-btn', 'aria-label': '閉じる',
+      onclick: () => { safeSet(BANNER_KEY, '1'); el.remove(); },
+    }, '✕'),
+  );
+  return el;
+}
+
+const VIEWS = {
+  today: {
+    title: '今日',
+    placeholder: '今日やること（例: 資料送る 15時）',
+    build() {
+      const overdue = activeTasks().filter(isOverdue).sort(cmpTask);
+      const todays = activeTasks().filter(isDueToday).sort(cmpTask);
+      const out = [installBanner()];
+      if (overdue.length) {
+        out.push(h('div', { class: 'alert' }, `期限切れが ${overdue.length} 件あります。今日片づけるか、日付を決め直しましょう。`));
+        out.push(section('期限切れ', overdue, {
+          danger: true,
+          action: overdue.length > 1
+            ? h('button', { type: 'button', class: 'text-btn', onclick: () => moveTasks(overdue.map((t) => t.id), today()) }, 'すべて今日へ')
+            : null,
+        }));
+      }
+      if (todays.length) out.push(section('今日', todays));
+      if (!overdue.length && !todays.length) {
+        const some = activeTasks().filter((t) => !t.due).length;
+        out.push(empty('今日のタスクはすべて完了 🎉', some ? `「やりたい」に ${some} 件あります。余裕があれば手をつけてみましょう。` : '上の欄から追加できます。'));
+      }
+      return out;
+    },
+  },
+  upcoming: {
+    title: '予定',
+    placeholder: '予定を追加（例: 歯医者 11/5 15時）',
+    build() {
+      const td = today();
+      const list = activeTasks().filter((t) => t.due && t.due > td).sort(cmpTask);
+      if (!list.length) return [empty('先の予定はありません', '期限のあるタスクがここに日付順で並びます。')];
+      const groups = new Map();
+      for (const t of list) {
+        if (!groups.has(t.due)) groups.set(t.due, []);
+        groups.get(t.due).push(t);
+      }
+      return [...groups].map(([due, items]) => {
+        const diff = diffDays(due, td);
+        const prefix = diff === 1 ? '明日 · ' : diff === 2 ? '明後日 · ' : '';
+        return section(prefix + fmtMD(due), items);
+      });
+    },
+  },
+  someday: {
+    title: 'やりたいこと',
+    placeholder: 'あれしたい、これしたい…',
+    build() {
+      const list = activeTasks().filter((t) => !t.due)
+        .sort((a, b) => (b.star ? 1 : 0) - (a.star ? 1 : 0) || b.createdAt - a.createdAt);
+      if (!list.length) return [empty('思いついたことを気軽にメモ', '期限のないアイデアや「いつかやりたい」はここへ。日付を決めたら予定に移ります。')];
+      return [section(`${list.length} 件`, list)];
+    },
+  },
+  done: {
+    title: '完了',
+    placeholder: '今日やること',
+    build() {
+      const list = tasks.filter((t) => t.done).sort((a, b) => b.doneAt - a.doneAt).slice(0, 300);
+      if (!list.length) return [empty('まだ完了したタスクはありません', '')];
+      const todayDone = list.filter((t) => ymd(new Date(t.doneAt)) === today()).length;
+      return [section(`今日 ${todayDone} 件完了`, list, {
+        action: h('button', { type: 'button', class: 'text-btn', onclick: clearDone }, '履歴を削除'),
+      })];
+    },
+  },
+};
+
+function updateCounts() {
+  const overdue = activeTasks().filter(isOverdue).length;
+  const todays = activeTasks().filter(isDueToday).length;
+  const ct = $('#countToday');
+  ct.textContent = overdue + todays || '';
+  ct.classList.toggle('danger', overdue > 0);
+  $('#countUpcoming').textContent = '';
+  $('#countSomeday').textContent = '';
+}
+
+function render() {
+  if (!VIEWS[view]) view = 'today';
+  $('#todayLabel').textContent = fmtLong(today());
+  $('#viewTitle').textContent = VIEWS[view].title;
+  $('#quickInput').placeholder = VIEWS[view].placeholder;
+  document.querySelectorAll('.tabs button').forEach((b) => {
+    b.classList.toggle('active', b.dataset.view === view);
+  });
+  $('#list').replaceChildren(...VIEWS[view].build().filter(Boolean));
+  updateCounts();
+  updateHint();
+}
+
+/* ---------- バッジ ---------- */
+
+function updateBadge() {
+  if (!('setAppBadge' in navigator)) return;
+  const n = activeTasks().filter((t) => isOverdue(t) || t.due === today()).length;
+  (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
+}
+
+function refreshBadgeStatus() {
+  const el = $('#badgeStatus');
+  const btn = $('#badgeBtn');
+  if (!('setAppBadge' in navigator) || !('Notification' in window)) {
+    el.textContent = 'この環境では使えません（ホーム画面に追加したアプリで開いてください）';
+    btn.disabled = true;
+    return;
+  }
+  btn.disabled = Notification.permission === 'granted';
+  el.textContent = {
+    granted: '有効です',
+    denied: '許可されていません。iPhone の「設定」→「通知」→「やること」から許可してください。',
+    default: '',
+  }[Notification.permission];
+}
+
+/* ---------- 編集シート ---------- */
+
+function openSheet(el) {
+  el.hidden = false;
+}
+function closeSheet(el) {
+  el.hidden = true;
+}
+
+function syncChips() {
+  const v = $('#fDue').value;
+  document.querySelectorAll('#dueChips .chip').forEach((c) => {
+    const key = c.dataset.due;
+    c.classList.toggle('on', key === 'none' ? !v : presetDue(key) === v && !!v);
+  });
+}
+
+function openEditor(id, preset = {}) {
+  editingId = id || null;
+  const t = id ? findTask(id) : { title: '', note: '', due: null, time: null, repeat: 'none', star: false, ...preset };
+  if (!t) return;
+  $('#editorTitle').textContent = id ? 'タスクを編集' : '新しいタスク';
+  $('#fTitle').value = t.title;
+  $('#fNote').value = t.note || '';
+  $('#fDue').value = t.due || '';
+  $('#fTime').value = t.time || '';
+  $('#fRepeat').value = t.repeat || 'none';
+  $('#fStar').checked = !!t.star;
+  $('#deleteBtn').hidden = !id;
+  syncChips();
+  openSheet($('#editor'));
+  if (!id) $('#fTitle').focus();
+}
+
+function saveEditor(e) {
+  e.preventDefault();
+  const title = $('#fTitle').value.trim();
+  if (!title) {
+    $('#fTitle').focus();
+    return;
+  }
+  const data = {
+    title,
+    note: $('#fNote').value.trim(),
+    due: $('#fDue').value || null,
+    time: $('#fTime').value || null,
+    repeat: $('#fRepeat').value,
+    star: $('#fStar').checked,
+  };
+  if (!data.due && (data.time || data.repeat !== 'none')) data.due = today();
+  data.monthDay = data.repeat === 'monthly' && data.due ? parseYmd(data.due).getDate() : undefined;
+
+  if (editingId) {
+    Object.assign(findTask(editingId), data);
+    commit();
+  } else {
+    const t = addTask(data);
+    commit(addedMessage(t));
+    $('#quickInput').value = '';
+  }
+  closeSheet($('#editor'));
+}
+
+function addedMessage(t) {
+  return `追加しました（${t.due ? dueLabel(t) : 'やりたいこと'}）`;
+}
+
+/* ---------- トースト ---------- */
+
+function toast(msg, snap) {
+  undoSnapshot = snap || null;
+  $('#toastMsg').textContent = msg;
+  $('#toastUndo').hidden = !snap;
+  $('#toast').hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { $('#toast').hidden = true; undoSnapshot = null; }, 4000);
+}
+
+/* ---------- バックアップ ---------- */
+
+async function exportData() {
+  const json = JSON.stringify({ app: 'yarukoto', version: 1, exportedAt: new Date().toISOString(), tasks }, null, 2);
+  const name = `yarukoto-${today()}.json`;
+  const file = new File([json], name, { type: 'application/json' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file] });
+      return;
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+    }
+  }
+  const url = URL.createObjectURL(file);
+  const a = h('a', { href: url, download: name });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function importData(file) {
+  try {
+    const data = JSON.parse(await file.text());
+    const list = Array.isArray(data) ? data : data.tasks;
+    if (!Array.isArray(list) || !list.every((t) => t && typeof t.id === 'string' && typeof t.title === 'string')) {
+      throw new Error('形式が違います');
+    }
+    if (!confirm(`${list.length} 件のタスクを読み込みます。いまのデータは置き換わります。よろしいですか？`)) return;
+    const snap = JSON.stringify(tasks);
+    tasks = list;
+    closeSheet($('#settings'));
+    commit('読み込みました', snap);
+  } catch (err) {
+    alert(`読み込めませんでした: ${err.message}`);
+  }
+}
+
+/* ---------- イベント ---------- */
+
+function updateHint() {
+  const text = $('#quickInput').value;
+  if (!text.trim()) {
+    $('#hint').textContent = '';
+    return;
+  }
+  const r = resolveQuick(text);
+  const where = r.due ? dueLabel({ due: r.due, time: r.time }) : 'やりたいこと';
+  $('#hint').textContent = `→ ${where}${r.star ? ' · ★' : ''} に追加`;
+}
+
+$('#quickForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = $('#quickInput').value;
+  if (!text.trim()) return;
+  const t = addTask(resolveQuick(text));
+  $('#quickInput').value = '';
+  commit(addedMessage(t));
+});
+$('#quickInput').addEventListener('input', updateHint);
+$('#detailBtn').addEventListener('click', () => {
+  const text = $('#quickInput').value;
+  openEditor(null, text.trim() ? resolveQuick(text) : { due: defaultDueForView() });
+});
+
+document.querySelectorAll('.tabs button').forEach((b) => {
+  b.addEventListener('click', () => {
+    view = b.dataset.view;
+    safeSet(VIEW_KEY, view);
+    render();
+    window.scrollTo(0, 0);
+  });
+});
+
+$('#editForm').addEventListener('submit', saveEditor);
+$('#fDue').addEventListener('input', syncChips);
+$('#dueChips').addEventListener('click', (e) => {
+  const chip = e.target.closest('.chip');
+  if (!chip) return;
+  $('#fDue').value = presetDue(chip.dataset.due);
+  if (!$('#fDue').value) $('#fTime').value = '';
+  syncChips();
+});
+$('#deleteBtn').addEventListener('click', () => {
+  if (!editingId) return;
+  closeSheet($('#editor'));
+  deleteTask(editingId);
+});
+
+document.querySelectorAll('.backdrop').forEach((bd) => {
+  bd.addEventListener('click', (e) => {
+    if (e.target === bd || e.target.closest('[data-close]')) closeSheet(bd);
+  });
+});
+
+$('#settingsBtn').addEventListener('click', () => {
+  refreshBadgeStatus();
+  openSheet($('#settings'));
+});
+$('#badgeBtn').addEventListener('click', async () => {
+  try {
+    await Notification.requestPermission();
+  } catch { /* 古い環境 */ }
+  refreshBadgeStatus();
+  updateBadge();
+});
+$('#exportBtn').addEventListener('click', exportData);
+$('#importBtn').addEventListener('click', () => $('#importFile').click());
+$('#importFile').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (file) importData(file);
+});
+
+$('#toastUndo').addEventListener('click', () => {
+  if (!undoSnapshot) return;
+  tasks = JSON.parse(undoSnapshot);
+  undoSnapshot = null;
+  $('#toast').hidden = true;
+  persist();
+  render();
+});
+
+// 日付の変わり目や時刻の経過で「期限切れ」を更新する
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    render();
+    updateBadge();
+  }
+});
+setInterval(() => {
+  if (document.visibilityState === 'visible' && $('#editor').hidden) render();
+  updateBadge();
+}, 60 * 1000);
+
+/* ---------- 起動 ---------- */
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+if (navigator.storage && navigator.storage.persist) {
+  navigator.storage.persist().catch(() => {});
+}
+render();
+updateBadge();
