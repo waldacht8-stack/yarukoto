@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '10';
+const APP_VERSION = '11';
 const STORE_KEY = 'yarukoto.tasks.v1';
 const THEME_KEY = 'yarukoto.theme';
 const BADGE_KEY = 'yarukoto.badge';
@@ -1387,26 +1387,38 @@ function updateHint() {
 
 /* ---------- 追加用の入力欄 ---------- */
 
-// キーボードの高さだけ入力欄を持ち上げる（iOS はキーボードで画面が縮まないため）
+// 入力欄の置き場所を、キーボードを除いた「実際に見えている範囲」に合わせる。
+// iOS はキーボードで画面が縮まず、見えている範囲だけがずれるので、その範囲に重ねて置く
 function syncKeyboardInset() {
-  const vv = window.visualViewport;
-  const kb = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
   const el = $('#composer');
-  const open = el.classList.contains('kb');
-  el.style.setProperty('--kb', `${Math.round(kb)}px`);
-  el.classList.toggle('kb', kb > 40);
-  // キーボードが閉じたら入力欄も閉じてホームに戻る
-  if (open && kb <= 40 && el.classList.contains('open')) closeComposer();
+  const vv = window.visualViewport;
+  if (!vv) return;
+  el.style.top = `${Math.round(vv.offsetTop)}px`;
+  el.style.height = `${Math.round(vv.height)}px`;
+  el.classList.toggle('kb', document.documentElement.clientHeight - vv.height > 80);
+}
+
+// キーボードが出入りするアニメーションの間も位置を追いかける
+let viewportTracker = 0;
+function trackViewport(ms = 700) {
+  cancelAnimationFrame(viewportTracker);
+  const until = performance.now() + ms;
+  const tick = () => {
+    syncKeyboardInset();
+    if (performance.now() < until) viewportTracker = requestAnimationFrame(tick);
+  };
+  tick();
 }
 
 function openComposer() {
   const el = $('#composer');
   clearTimeout(closeTimers.get(el));
-  el.classList.remove('closing');
+  el.classList.remove('closing', 'sent');
   el.hidden = false;
   syncKeyboardInset();
   // iOS ではタップの処理の中で focus しないとキーボードが出ない
   $('#quickInput').focus();
+  trackViewport();
   void el.offsetWidth;
   el.classList.add('open');
   document.body.classList.add('composing');
@@ -1420,9 +1432,10 @@ function closeComposer() {
   el.classList.remove('open');
   el.classList.add('closing');
   document.body.classList.remove('composing');
+  trackViewport();
   closeTimers.set(el, setTimeout(() => {
     el.hidden = true;
-    el.classList.remove('closing');
+    el.classList.remove('closing', 'sent');
     // 何も入力せずに閉じたら、選んでいた期限も元に戻す
     if (!$('#quickInput').value.trim()) {
       quickDue = undefined;
@@ -1431,25 +1444,63 @@ function closeComposer() {
   }, reduceMotion() ? 0 : SHEET_CLOSE_MS));
 }
 
+// 追加したタスクまで一覧をスクロールする（隠れているときだけ）
+function revealTask(id) {
+  const li = document.querySelector(`#list .task[data-id="${CSS.escape(id)}"]`);
+  if (!li) return;
+  const list = $('#list').getBoundingClientRect();
+  const r = li.getBoundingClientRect();
+  if (r.top < list.top || r.bottom > list.bottom - 100) {
+    li.scrollIntoView({ block: 'center', behavior: reduceMotion() ? 'auto' : 'smooth' });
+  }
+}
+
+const SENT_MS = 380;
+
+// 追加ボタン：チェックマークで受け付けを見せてから入力欄を閉じ、一覧で追加したタスクを光らせる
 function quickAdd() {
-  const text = $('#quickInput').value;
-  if (!text.trim()) return;
+  const el = $('#composer');
+  const input = $('#quickInput');
+  const text = input.value;
+  if (!text.trim()) {
+    // 空のときは入力欄を小さく揺らして知らせる
+    if (!reduceMotion()) {
+      $('.composer-row').animate(
+        [{ transform: 'none' }, { transform: 'translateX(-6px)' }, { transform: 'translateX(5px)' }, { transform: 'translateX(-3px)' }, { transform: 'none' }],
+        { duration: 360, easing: 'ease-out' },
+      );
+    }
+    input.focus();
+    return;
+  }
+  if (el.classList.contains('sent')) return;
   const t = addTask(resolveQuick(text));
-  $('#quickInput').value = '';
-  commit(addedMessage(t));
+  persist();
+  el.classList.add('sent');
+  if (!reduceMotion()) {
+    input.animate(
+      [{ transform: 'none', opacity: 1 }, { transform: 'translateY(-14px)', opacity: 0 }],
+      { duration: 300, easing: EASE, fill: 'forwards' },
+    ).finished.catch(() => {}).then(() => input.getAnimations().forEach((a) => a.cancel()));
+  }
+  setTimeout(() => {
+    input.value = '';
+    quickDue = undefined;
+    quickStar = false;
+    // 入力欄がすでに閉じていても、次の追加を受け付けられるように印を外す
+    if (el.hidden) el.classList.remove('sent');
+    else closeComposer();
+    commit(addedMessage(t));
+    revealTask(t.id);
+  }, reduceMotion() ? 0 : SENT_MS);
 }
 $('#quickForm').addEventListener('submit', (e) => {
   e.preventDefault();
   quickAdd();
 });
 $('#quickInput').addEventListener('input', updateHint);
-// キーボードの「完了」や画面外のタップで入力が終わったら、入力欄を閉じる
-$('#quickInput').addEventListener('blur', () => {
-  setTimeout(() => {
-    if (document.activeElement !== $('#quickInput')) closeComposer();
-  }, 60);
-});
-// 追加ボタンを押してもキーボードを閉じない（続けて入力できるように）
+$('#quickInput').addEventListener('focus', () => trackViewport());
+// 追加ボタンを押す瞬間にキーボードが閉じて位置がずれないようにする
 $('#quickForm .send-btn').addEventListener('pointerdown', (e) => e.preventDefault());
 $('#fab').addEventListener('click', openComposer);
 $('#composer').addEventListener('click', (e) => {

@@ -1,6 +1,6 @@
 // オフラインでも開けるように、アプリ本体をキャッシュする。
 // ファイルを更新したら CACHE の番号（と app.js の APP_VERSION）を上げる。
-const CACHE = 'yarukoto-v10';
+const CACHE = 'yarukoto-v11';
 const ASSETS = [
   './',
   './index.html',

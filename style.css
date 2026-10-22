@@ -255,7 +255,8 @@ button {
 .fab:active { transform: scale(.92); }
 body.composing .fab, body.sheet-open .fab { transform: scale(.6); opacity: 0; pointer-events: none; }
 
-.composer { position: fixed; inset: 0; z-index: 25; }
+/* top と height は、見えている範囲に合わせて JS で決める */
+.composer { position: fixed; left: 0; right: 0; top: 0; height: 100%; z-index: 25; }
 .composer[hidden] { display: none; }
 .composer-scrim {
   position: absolute;
@@ -269,7 +270,7 @@ body.composing .fab, body.sheet-open .fab { transform: scale(.6); opacity: 0; po
   position: absolute;
   left: 0;
   right: 0;
-  bottom: var(--kb, 0px);
+  bottom: 0;
   max-width: 640px;
   margin: 0 auto;
   padding: 10px 0 calc(12px + env(safe-area-inset-bottom));
@@ -277,7 +278,7 @@ body.composing .fab, body.sheet-open .fab { transform: scale(.6); opacity: 0; po
   border-radius: 22px 22px 0 0;
   box-shadow: 0 -8px 30px rgba(0, 0, 0, .12);
   transform: translateY(110%);
-  transition: transform .45s var(--ease), bottom .25s var(--ease);
+  transition: transform .45s var(--ease);
 }
 [data-theme="night"] .composer-card { border-top: 1px solid var(--line); }
 .composer.open .composer-card { transform: none; }
@@ -310,6 +311,7 @@ body.composing .fab, body.sheet-open .fab { transform: scale(.6); opacity: 0; po
 .composer-row input::placeholder { color: var(--muted); }
 .send-btn {
   flex: none;
+  position: relative;
   width: 42px;
   height: 42px;
   border-radius: calc(var(--r-lg) - 4px);
@@ -317,7 +319,15 @@ body.composing .fab, body.sheet-open .fab { transform: scale(.6); opacity: 0; po
   color: var(--on-accent);
   display: grid;
   place-items: center;
+  transition: background-color .3s var(--ease), transform .3s var(--ease);
 }
+.send-btn svg { grid-area: 1 / 1; transition: transform .4s var(--ease), opacity .25s var(--ease); }
+.send-btn .ico-done { opacity: 0; transform: scale(.4) rotate(-20deg); }
+/* 追加を受け付けたら、矢印がチェックに変わる */
+.composer.sent .send-btn { background: var(--ok); transform: scale(1.06); }
+[data-theme="night"] .composer.sent .send-btn { color: #0E1525; }
+.composer.sent .send-btn .ico-send { opacity: 0; transform: translateY(-10px); }
+.composer.sent .send-btn .ico-done { opacity: 1; transform: none; }
 [data-theme="forest"] .send-btn { border-radius: 21px; }
 .quick-chips { display: flex; gap: 6px; padding: 2px 16px 0; overflow-x: auto; scrollbar-width: none; }
 .quick-chips::-webkit-scrollbar { display: none; }
