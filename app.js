@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '11';
+const APP_VERSION = '12';
 const STORE_KEY = 'yarukoto.tasks.v1';
 const THEME_KEY = 'yarukoto.theme';
 const BADGE_KEY = 'yarukoto.badge';
@@ -1118,6 +1118,8 @@ function openPeek(id, sourceRow) {
   void peek.offsetWidth;
   peek.classList.add('open');
   peekState = { id, at: Date.now(), srcLi };
+  // 長押しの途中で文字が選ばれていたら外す
+  window.getSelection()?.removeAllRanges();
   srcLi?.classList.add('peeking');
 
   if (reduceMotion() || !sourceRow) return;
@@ -1667,6 +1669,10 @@ if (navigator.storage && navigator.storage.persist) {
 }
 // iOS Safari で :active（押したときの見た目）を効かせるため
 document.addEventListener('touchstart', () => {}, { passive: true });
+// 長押しのメニュー（コピーなど）は入力欄以外では出さない
+document.addEventListener('contextmenu', (e) => {
+  if (!e.target.closest('input, textarea, [contenteditable]')) e.preventDefault();
+});
 // 画面の拡大縮小を止める（iOS は viewport の user-scalable=no を無視するため）
 for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
   document.addEventListener(type, (e) => e.preventDefault(), { passive: false });
