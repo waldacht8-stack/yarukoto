@@ -1,7 +1,7 @@
 'use strict';
 
 const STORE_KEY = 'yarukoto.tasks.v1';
-const VIEW_KEY = 'yarukoto.view';
+const FOLD_KEY = 'yarukoto.folded';
 const BANNER_KEY = 'yarukoto.installBannerClosed';
 const SWIPE_TIP_KEY = 'yarukoto.swipeTipClosed';
 const WEEK = '日月火水木金土';
@@ -10,18 +10,16 @@ const REPEAT_LABEL = { daily: '毎日', weekdays: '平日', weekly: '毎週', mo
 const $ = (sel) => document.querySelector(sel);
 
 let tasks = loadTasks();
-let view = safeGet(VIEW_KEY) || 'today';
 let editingId = null;
 let undoSnapshot = null;
 let toastTimer = null;
-// クイック入力の下のボタンで選んだ期限（undefined ならタブごとの既定）と重要フラグ
+// クイック入力の下のボタンで選んだ期限（undefined なら今日）と重要フラグ
 let quickDue;
 let quickStar = false;
 // 次の描画で特定のタスクに付けるアニメーション用クラス（id → クラス）
 const fx = new Map();
 let lastRatio = null;
 let lastRemain = null;
-let lastCount = null;
 
 function mark(id, cls) {
   fx.set(id, `${fx.get(id) || ''} ${cls}`);
@@ -281,15 +279,9 @@ function parseQuick(text) {
   return { title: rest.join(' '), ...out };
 }
 
-function defaultDueForView() {
-  if (view === 'someday') return null;
-  if (view === 'upcoming') return addDays(today(), 1);
-  return today();
-}
-
 function resolveQuick(text) {
   const p = parseQuick(text);
-  let due = p.due !== undefined ? p.due : quickDue !== undefined ? quickDue : defaultDueForView();
+  let due = p.due !== undefined ? p.due : quickDue !== undefined ? quickDue : today();
   if (!due && p.time) due = today();
   return { title: p.title, due, time: p.time || null, star: !!p.star || quickStar };
 }
@@ -490,17 +482,35 @@ function taskItem(t) {
   return li;
 }
 
-function section(title, items, { danger = false, action = null, id = null, count = true } = {}) {
-  return h('section', { class: `section${danger ? ' danger' : ''}`, id },
-    h('div', { class: 'section-head' },
-      h('h2', {}, title, count ? h('span', { class: 'section-count' }, items.length) : null),
-      action),
-    h('ul', { class: 'tasks' }, items.map((t, i) => {
-      const li = taskItem(t);
-      li.style.setProperty('--i', i);
-      return li;
-    })),
+// 折りたたんだセクション（key → true/false）
+const folded = (() => {
+  try { return JSON.parse(safeGet(FOLD_KEY)) || {}; } catch { return {}; }
+})();
+
+// key を渡すと、見出しをタップして折りたためるセクションになる
+function section(title, items, { key = null, danger = false, action = null, count = true, foldDefault = false } = {}) {
+  const head = [h('h2', {}, title, count ? h('span', { class: 'section-count' }, items.length) : null), action];
+  // 見出し内のボタンを押しても折りたたまれないようにする
+  if (action) action.addEventListener('click', (e) => e.preventDefault());
+  const list = h('ul', { class: 'tasks' }, items.map((t, i) => {
+    const li = taskItem(t);
+    li.style.setProperty('--i', i);
+    return li;
+  }));
+  if (!key) {
+    return h('section', { class: `section${danger ? ' danger' : ''}` }, h('div', { class: 'section-head' }, head), list);
+  }
+  const isFolded = key in folded ? folded[key] : foldDefault;
+  const el = h('details', { class: `section fold${danger ? ' danger' : ''}`, open: !isFolded },
+    // summary 自体を flex にすると古い iOS Safari で崩れるので内側で並べる
+    h('summary', {}, h('div', { class: 'section-head' }, head)),
+    list,
   );
+  el.addEventListener('toggle', () => {
+    folded[key] = !el.open;
+    safeSet(FOLD_KEY, JSON.stringify(folded));
+  });
+  return el;
 }
 
 // 今日の進み具合（リング＋残り件数）
@@ -542,54 +552,7 @@ function todaySummary(overdue, todays) {
   );
 }
 
-// 予定タブ上部の 2 週間カレンダー
-function weekStrip() {
-  const td = today();
-  const counts = new Map();
-  for (const t of activeTasks()) {
-    if (!t.due) continue;
-    const key = t.due < td ? td : t.due;
-    counts.set(key, (counts.get(key) || 0) + 1);
-  }
-  const days = [];
-  for (let i = 0; i < 14; i++) {
-    const d = addDays(td, i);
-    const dow = parseYmd(d).getDay();
-    const n = counts.get(d) || 0;
-    const cls = ['day', i === 0 && 'is-today', n && 'has', dow === 0 && 'sun', dow === 6 && 'sat'].filter(Boolean).join(' ');
-    days.push(h('button', {
-      type: 'button',
-      class: cls,
-      'aria-label': `${fmtMD(d)} ${n}件`,
-      onclick: () => {
-        if (i === 0) return setView('today');
-        const s = document.getElementById(`d-${d}`);
-        if (s) s.scrollIntoView({ behavior: reduceMotion() ? 'auto' : 'smooth', block: 'start' });
-      },
-    },
-    h('span', { class: 'dow' }, i === 0 ? '今日' : WEEK[dow]),
-    h('span', { class: 'dn' }, parseYmd(d).getDate()),
-    h('span', { class: 'dots' }, n > 3 ? `${n}` : '•'.repeat(n))));
-  }
-  return h('div', { class: 'week' }, days);
-}
-
 function dayKey(ts) { return ymd(new Date(ts)); }
-
-// 今日完了したタスク（今日タブの一番下に折りたたんで置く）
-let doneFoldOpen = false;
-function doneFold() {
-  const td = today();
-  const list = tasks.filter((t) => t.done && t.doneAt && dayKey(t.doneAt) === td)
-    .sort((a, b) => b.doneAt - a.doneAt);
-  if (!list.length) return null;
-  const el = h('details', { class: 'done-fold', open: doneFoldOpen },
-    h('summary', {}, '今日完了したタスク', h('span', { class: 'section-count' }, list.length)),
-    h('ul', { class: 'tasks' }, list.map(taskItem)),
-  );
-  el.addEventListener('toggle', () => { doneFoldOpen = el.open; });
-  return el;
-}
 
 function logStats() {
   const td = today();
@@ -687,138 +650,109 @@ function installBanner() {
   return el;
 }
 
-const VIEWS = {
-  today: {
-    title: '今日',
-    placeholder: '今日やること（例: 資料送る 15時）',
-    build() {
-      const overdue = activeTasks().filter(isOverdue).sort(cmpTask);
-      const todays = activeTasks().filter(isDueToday).sort(cmpTask);
-      const out = [installBanner(), todaySummary(overdue, todays)];
-      if (overdue.length) {
-        out.push(section('期限切れ', overdue, {
-          danger: true,
-          action: overdue.length > 1
-            ? h('button', { type: 'button', class: 'text-btn', onclick: () => moveTasks(overdue.map((t) => t.id), today()) }, 'すべて今日へ')
-            : null,
-        }));
-      }
-      if (todays.length) out.push(section('今日', todays));
-      if (!overdue.length && !todays.length) {
-        const some = activeTasks().filter((t) => !t.due).length;
-        out.push(empty('今日のタスクはすべて完了 🎉', some ? `「やりたい」に ${some} 件あります。余裕があれば手をつけてみましょう。` : '上の欄から追加できます。'));
-      }
-      out.push(doneFold(), swipeTip());
-      return out;
-    },
-  },
-  upcoming: {
-    title: '予定',
-    placeholder: '予定を追加（例: 歯医者 11/5 15時）',
-    build() {
-      const td = today();
-      const list = activeTasks().filter((t) => t.due && t.due > td).sort(cmpTask);
-      if (!list.length) return [weekStrip(), empty('先の予定はありません', '期限のあるタスクがここに日付順で並びます。')];
-      const groups = new Map();
-      for (const t of list) {
-        if (!groups.has(t.due)) groups.set(t.due, []);
-        groups.get(t.due).push(t);
-      }
-      return [weekStrip(), ...[...groups].map(([due, items]) => {
-        const diff = diffDays(due, td);
-        const prefix = diff === 1 ? '明日 · ' : diff === 2 ? '明後日 · ' : diff < 7 ? '' : `${diff}日後 · `;
-        return section(prefix + fmtMD(due), items, { id: `d-${due}` });
-      })];
-    },
-  },
-  someday: {
-    title: 'やりたいこと',
-    placeholder: 'あれしたい、これしたい…',
-    build() {
-      const list = activeTasks().filter((t) => !t.due)
-        .sort((a, b) => (b.star ? 1 : 0) - (a.star ? 1 : 0) || b.createdAt - a.createdAt);
-      if (!list.length) return [empty('思いついたことを気軽にメモ', '期限のないアイデアや「いつかやりたい」はここへ。日付を決めたら予定に移ります。')];
-      return [section(`${list.length} 件`, list, { count: false })];
-    },
-  },
-  log: {
-    title: '記録',
-    placeholder: '',
-    build() {
-      const s = logStats();
-      const out = [
-        h('div', { class: 'stats' },
-          statTile('期日内に完了', s.onTime ?? '—', s.onTime == null ? '' : '%',
-            s.judged ? `直近30日 · ${s.judged}件中` : '期限つきの完了がまだありません'),
-          statTile('今週の完了', s.week, '件', '直近7日'),
-          statTile('連続', s.streak, '日', '毎日1件以上完了'),
-          statTile('期限切れ', s.overdue, '件', s.overdue ? 'タップで今日へ' : 'ありません',
-            s.overdue ? { cls: 'danger', onclick: () => setView('today') } : {}),
-        ),
-        doneChart(s.perDay),
-      ];
-      const list = tasks.filter((t) => t.done).sort((a, b) => b.doneAt - a.doneAt).slice(0, 200);
-      if (!list.length) {
-        out.push(empty('まだ完了したタスクはありません', 'タスクを完了すると、ここに記録されます。'));
-        return out;
-      }
-      const groups = new Map();
-      for (const t of list) {
-        const k = dayKey(t.doneAt);
-        if (!groups.has(k)) groups.set(k, []);
-        groups.get(k).push(t);
-      }
-      [...groups].forEach(([day, items], i) => {
-        const diff = diffDays(day, today());
-        const label = diff === 0 ? '今日' : diff === -1 ? '昨日' : fmtMD(day);
-        out.push(section(label, items, {
-          action: i === 0 ? h('button', { type: 'button', class: 'text-btn', onclick: clearDone }, '履歴を削除') : null,
-        }));
-      });
-      return out;
-    },
-  },
-};
+// すべてのタスクを 1 本のリストに、期限の近い順のセクションで並べる
+function buildList() {
+  const td = today();
+  const tomorrow = addDays(td, 1);
+  const weekEnd = addDays(td, 7);
+  const act = activeTasks();
+  const overdue = act.filter(isOverdue).sort(cmpTask);
+  const todays = act.filter(isDueToday).sort(cmpTask);
+  const tmr = act.filter((t) => t.due === tomorrow).sort(cmpTask);
+  const week = act.filter((t) => t.due > tomorrow && t.due <= weekEnd).sort(cmpTask);
+  const later = act.filter((t) => t.due > weekEnd).sort(cmpTask);
+  const someday = act.filter((t) => !t.due)
+    .sort((a, b) => (b.star ? 1 : 0) - (a.star ? 1 : 0) || b.createdAt - a.createdAt);
+  const doneToday = tasks.filter((t) => t.done && t.doneAt && dayKey(t.doneAt) === td)
+    .sort((a, b) => b.doneAt - a.doneAt);
 
-function updateCounts() {
-  const overdue = activeTasks().filter(isOverdue).length;
-  const todays = activeTasks().filter(isDueToday).length;
-  const ct = $('#countToday');
-  const n = overdue + todays;
-  ct.textContent = n || '';
-  ct.classList.toggle('danger', overdue > 0);
-  if (lastCount !== null && n !== lastCount) {
-    ct.classList.remove('bump');
-    void ct.offsetWidth; // アニメーションを最初からやり直す
-    ct.classList.add('bump');
+  const out = [installBanner(), todaySummary(overdue, todays)];
+  if (overdue.length) {
+    out.push(section('期限切れ', overdue, {
+      key: 'overdue',
+      danger: true,
+      action: overdue.length > 1
+        ? h('button', { type: 'button', class: 'text-btn', onclick: () => moveTasks(overdue.map((t) => t.id), today()) }, 'すべて今日へ')
+        : null,
+    }));
   }
-  lastCount = n;
-  $('#countUpcoming').textContent = '';
-  $('#countSomeday').textContent = '';
+  if (todays.length) out.push(section('今日', todays, { key: 'today' }));
+  else if (!overdue.length) {
+    out.push(act.length || doneToday.length
+      ? empty('今日のタスクはすべて完了 🎉', '先の予定ややりたいことに手をつけるのもおすすめです。')
+      : empty('まだタスクはありません', '上の欄から追加できます。期限のない「やりたいこと」も気軽にどうぞ。'));
+  }
+  if (tmr.length) out.push(section(`明日 · ${fmtMD(tomorrow)}`, tmr, { key: 'tomorrow' }));
+  if (week.length) out.push(section(`今週 · 〜${fmtMD(weekEnd)}`, week, { key: 'week' }));
+  if (later.length) out.push(section('それ以降', later, { key: 'later' }));
+  if (someday.length) out.push(section('やりたいこと', someday, { key: 'someday' }));
+  if (doneToday.length) out.push(section('今日完了', doneToday, { key: 'done', foldDefault: true }));
+  out.push(swipeTip());
+  return out;
 }
 
-let enterTimer = null;
+// 記録シートの中身
+function buildLog() {
+  const s = logStats();
+  const out = [
+    h('div', { class: 'stats' },
+      statTile('期日内に完了', s.onTime ?? '—', s.onTime == null ? '' : '%',
+        s.judged ? `直近30日 · ${s.judged}件中` : '期限つきの完了がまだありません'),
+      statTile('今週の完了', s.week, '件', '直近7日'),
+      statTile('連続', s.streak, '日', '毎日1件以上完了'),
+      statTile('期限切れ', s.overdue, '件', s.overdue ? 'タップで一覧へ' : 'ありません',
+        s.overdue ? {
+          cls: 'danger',
+          onclick: () => {
+            closeSheet($('#logSheet'));
+            window.scrollTo({ top: 0, behavior: reduceMotion() ? 'auto' : 'smooth' });
+          },
+        } : {}),
+    ),
+    doneChart(s.perDay),
+  ];
+  const list = tasks.filter((t) => t.done).sort((a, b) => b.doneAt - a.doneAt).slice(0, 200);
+  if (!list.length) {
+    out.push(empty('まだ完了したタスクはありません', 'タスクを完了すると、ここに記録されます。'));
+    return out;
+  }
+  const groups = new Map();
+  for (const t of list) {
+    const k = dayKey(t.doneAt);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(t);
+  }
+  [...groups].forEach(([day, items], i) => {
+    const diff = diffDays(day, today());
+    const label = diff === 0 ? '今日' : diff === -1 ? '昨日' : fmtMD(day);
+    out.push(section(label, items, {
+      action: i === 0 ? h('button', { type: 'button', class: 'text-btn', onclick: clearDone }, '履歴を削除') : null,
+    }));
+  });
+  return out;
+}
+
+const enterTimers = new WeakMap();
+
+// 登場アニメーション用のクラスを一定時間だけ付ける
+function playEnter(el) {
+  if (reduceMotion()) return;
+  el.classList.add('view-enter');
+  clearTimeout(enterTimers.get(el));
+  enterTimers.set(el, setTimeout(() => el.classList.remove('view-enter'), 700));
+}
+
+function renderLog() {
+  $('#logBody').replaceChildren(...buildLog().filter(Boolean));
+}
 
 function render({ enter = false } = {}) {
-  if (!VIEWS[view]) view = 'today';
   const list = $('#list');
-  if (enter && !reduceMotion()) {
-    list.classList.add('view-enter');
-    clearTimeout(enterTimer);
-    enterTimer = setTimeout(() => list.classList.remove('view-enter'), 700);
-  }
+  if (enter) playEnter(list);
   $('#todayLabel').textContent = fmtLong(today());
-  $('#viewTitle').textContent = VIEWS[view].title;
-  $('#quickInput').placeholder = VIEWS[view].placeholder;
-  // 記録タブでは追加しないので入力欄を隠す
-  $('#quickForm').hidden = view === 'log';
-  if (view === 'log') showQuickChips(false);
-  document.querySelectorAll('.tabs button').forEach((b) => {
-    b.classList.toggle('active', b.dataset.view === view);
-  });
-  list.replaceChildren(...VIEWS[view].build().filter(Boolean));
+  list.replaceChildren(...buildList().filter(Boolean));
+  if (!$('#logSheet').hidden) renderLog();
   fx.clear();
-  updateCounts();
   updateHint();
 }
 
@@ -1013,15 +947,6 @@ function showQuickChips(show) {
   $('#quickChips').hidden = !show;
 }
 
-function setView(next) {
-  view = next;
-  quickDue = undefined;
-  quickStar = false;
-  safeSet(VIEW_KEY, view);
-  render({ enter: true });
-  window.scrollTo(0, 0);
-}
-
 $('#quickForm').addEventListener('submit', (e) => {
   e.preventDefault();
   const text = $('#quickInput').value;
@@ -1033,7 +958,11 @@ $('#quickForm').addEventListener('submit', (e) => {
 $('#quickInput').addEventListener('input', updateHint);
 $('#quickInput').addEventListener('focus', () => showQuickChips(true));
 $('#quickInput').addEventListener('blur', () => {
-  if (!$('#quickInput').value.trim()) showQuickChips(false);
+  if ($('#quickInput').value.trim()) return;
+  // 何も入力せずに閉じたら、選んでいた期限も元に戻す
+  showQuickChips(false);
+  quickDue = undefined;
+  quickStar = false;
 });
 // ボタンを押してもキーボードが閉じないように、フォーカスを奪わせない
 $('#quickChips').addEventListener('pointerdown', (e) => e.preventDefault());
@@ -1046,11 +975,7 @@ $('#quickChips').addEventListener('click', (e) => {
 });
 $('#detailBtn').addEventListener('click', () => {
   const text = $('#quickInput').value;
-  openEditor(null, text.trim() ? resolveQuick(text) : { due: defaultDueForView() });
-});
-
-document.querySelectorAll('.tabs button').forEach((b) => {
-  b.addEventListener('click', () => setView(b.dataset.view));
+  openEditor(null, text.trim() ? resolveQuick(text) : { due: today() });
 });
 
 $('#editForm').addEventListener('submit', saveEditor);
@@ -1074,6 +999,11 @@ document.querySelectorAll('.backdrop').forEach((bd) => {
   });
 });
 
+$('#logBtn').addEventListener('click', () => {
+  openSheet($('#logSheet'));
+  renderLog();
+  playEnter($('#logBody'));
+});
 $('#settingsBtn').addEventListener('click', () => {
   refreshBadgeStatus();
   openSheet($('#settings'));
@@ -1128,5 +1058,12 @@ if (navigator.storage && navigator.storage.persist) {
 }
 // iOS Safari で :active（押したときの見た目）を効かせるため
 document.addEventListener('touchstart', () => {}, { passive: true });
+// 画面の拡大縮小を止める（iOS は viewport の user-scalable=no を無視するため）
+for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
+  document.addEventListener(type, (e) => e.preventDefault(), { passive: false });
+}
+document.addEventListener('touchmove', (e) => {
+  if (e.touches.length > 1) e.preventDefault();
+}, { passive: false });
 render({ enter: true });
 updateBadge();

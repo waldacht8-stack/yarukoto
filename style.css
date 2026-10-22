@@ -34,6 +34,9 @@
 }
 
 * { box-sizing: border-box; }
+html {
+  touch-action: pan-x pan-y;
+}
 html, body {
   margin: 0;
   background: var(--bg);
@@ -43,7 +46,7 @@ html, body {
 }
 body {
   min-height: 100dvh;
-  padding-bottom: calc(72px + env(safe-area-inset-bottom));
+  padding-bottom: calc(32px + env(safe-area-inset-bottom));
 }
 button {
   font: inherit;
@@ -68,6 +71,7 @@ button {
   justify-content: space-between;
 }
 .date { font-size: 13px; color: var(--muted); }
+.head-actions { display: flex; gap: 2px; margin-right: -8px; }
 h1 { margin: 2px 0 0; font-size: 28px; font-weight: 700; }
 .icon-btn {
   width: 44px;
@@ -248,41 +252,6 @@ ul.tasks {
 .summary-sub { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; font-size: 13px; color: var(--muted); }
 .summary-sub .over { color: var(--danger); font-weight: 700; }
 
-/* 2 週間カレンダー */
-.week {
-  margin: 12px -16px 0;
-  padding: 2px 16px 4px;
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  scrollbar-width: none;
-  scroll-snap-type: x proximity;
-  scroll-padding-left: 16px;
-}
-.week::-webkit-scrollbar { display: none; }
-.day {
-  flex: none;
-  width: 46px;
-  padding: 8px 0 6px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  border-radius: 12px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  scroll-snap-align: start;
-}
-.day .dow { font-size: 11px; color: var(--muted); }
-.day .dn { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.day .dots { height: 12px; font-size: 11px; line-height: 12px; color: var(--accent); font-weight: 700; letter-spacing: -1px; }
-.day.sun .dow { color: var(--danger); }
-.day.sat .dow { color: var(--accent); }
-.day.is-today { background: var(--accent); border-color: var(--accent); color: #fff; }
-.day.is-today .dow, .day.is-today .dots { color: #fff; }
-.day:not(.has) .dn { opacity: .55; }
-.section[id] { scroll-margin-top: 150px; }
-
 /* クイック入力の期限ボタン */
 .quick-chips {
   display: flex;
@@ -327,51 +296,6 @@ ul.tasks {
   align-items: flex-start;
 }
 .banner p { margin: 0; flex: 1; }
-
-/* タブバー */
-.tabs {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 10;
-  background: var(--bar);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  backdrop-filter: blur(20px) saturate(180%);
-  border-top: 1px solid var(--line);
-  padding-bottom: env(safe-area-inset-bottom);
-}
-.tabs-inner { max-width: 640px; margin: 0 auto; display: grid; grid-template-columns: repeat(4, 1fr); }
-.tabs button {
-  position: relative;
-  padding: 8px 0 6px;
-  font-size: 11px;
-  color: var(--muted);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-}
-.tabs .ico { width: 24px; height: 24px; }
-.tabs button.active { color: var(--accent); }
-.tabs button.active .ico { transform: scale(1.08); }
-.tabs .ico { transition: transform .15s; }
-.count {
-  position: absolute;
-  top: 3px;
-  left: calc(50% + 8px);
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 9px;
-  background: var(--accent);
-  color: #fff;
-  font-size: 11px;
-  line-height: 18px;
-  font-weight: 700;
-}
-.count.danger { background: var(--danger); }
-.count:empty { display: none; }
 
 /* シート */
 .backdrop {
@@ -451,7 +375,7 @@ ul.tasks {
 .toast {
   position: fixed;
   left: 50%;
-  bottom: calc(80px + env(safe-area-inset-bottom));
+  bottom: calc(24px + env(safe-area-inset-bottom));
   transform: translateX(-50%);
   z-index: 30;
   width: max-content;
@@ -521,24 +445,22 @@ ul.tasks {
 .tag.late { color: var(--danger); background: var(--danger-weak); }
 .tag.ontime { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
 
-/* 今日タブの「今日完了したタスク」 */
-.done-fold { margin-top: 18px; }
-.done-fold summary {
-  list-style: none;
-  cursor: pointer;
-  margin: 0 4px 8px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--muted);
-  display: flex;
-  align-items: center;
-  gap: 6px;
+/* 折りたためるセクション */
+.fold > summary { list-style: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.fold > summary::-webkit-details-marker { display: none; }
+.fold > summary h2 { display: flex; align-items: center; }
+.fold > summary h2::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  margin: 0 10px 0 2px;
+  border: solid currentColor;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg) translate(-2px, -2px);
+  transition: transform .2s ease;
 }
-.done-fold summary::-webkit-details-marker { display: none; }
-.done-fold summary::before { content: "›"; font-size: 18px; line-height: 1; transition: transform .2s; }
-.done-fold[open] summary::before { transform: rotate(90deg); }
-.done-fold .section-count { margin-left: 0; }
-.done-fold[open] ul { animation: fade-up .25s ease-out; }
+.fold:not([open]) > summary h2::before { transform: rotate(-45deg); }
+.fold[open] > ul { animation: fade-up .25s ease-out; }
 
 /* ===== アニメーション ===== */
 
@@ -592,12 +514,6 @@ button:active { transform: scale(.94); }
 .all-done .ring-fg { stroke: var(--ok); }
 @keyframes ring-pulse { 50% { transform: scale(1.15); } }
 
-/* タブ */
-.tabs button.active .ico { animation: tab-pop .35s cubic-bezier(.3, 1.6, .5, 1); }
-@keyframes tab-pop { 40% { transform: scale(1.2) translateY(-2px); } }
-.count.bump { animation: bump .4s cubic-bezier(.3, 1.6, .5, 1); }
-@keyframes bump { 40% { transform: scale(1.35); } }
-
 /* 期限ボタンの出現 */
 .quick-chips:not([hidden]) .chip { animation: fade-up .25s cubic-bezier(.2, .8, .2, 1) both; }
 .quick-chips .chip:nth-child(2) { animation-delay: 20ms; }
@@ -625,9 +541,6 @@ button:active { transform: scale(.94); }
 /* 記録のバーが伸びる */
 .view-enter .col-bar { animation: grow .5s cubic-bezier(.2, .8, .2, 1) both; animation-delay: calc(var(--i, 0) * 25ms + 120ms); }
 @keyframes grow { from { transform: scaleY(0); } }
-
-/* 2 週間カレンダー */
-.day { transition: transform .12s ease, background-color .2s; }
 
 /* 動きを減らす設定の人には止める */
 @media (prefers-reduced-motion: reduce) {

@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -20,15 +20,20 @@
   <header class="top">
     <div>
       <div class="date" id="todayLabel"></div>
-      <h1 id="viewTitle">今日</h1>
+      <h1>やること</h1>
     </div>
+    <div class="head-actions">
+    <button type="button" id="logBtn" class="icon-btn" aria-label="記録">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20h16M7 16v-4M12 16V7M17 16v-7"/></svg>
+    </button>
     <button type="button" id="settingsBtn" class="icon-btn" aria-label="設定">
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
     </button>
+    </div>
   </header>
 
   <form id="quickForm" class="quick" autocomplete="off">
-    <input id="quickInput" type="text" enterkeyhint="done" aria-label="タスクを追加">
+    <input id="quickInput" type="text" enterkeyhint="done" aria-label="タスクを追加" placeholder="やることを追加（例: 牛乳を買う 明日 18時）">
     <button type="button" id="detailBtn" class="icon-btn add-btn" aria-label="詳細を指定して追加">
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
     </button>
@@ -46,26 +51,6 @@
   <main id="list"></main>
 </div>
 
-<nav class="tabs" aria-label="表示切替">
-  <div class="tabs-inner">
-    <button type="button" data-view="today">
-      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.4 1.4M17.6 17.6 19 19M5 19l1.4-1.4M17.6 6.4 19 5"/></svg>
-      <span>今日</span><span class="count" id="countToday"></span>
-    </button>
-    <button type="button" data-view="upcoming">
-      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>
-      <span>予定</span><span class="count" id="countUpcoming"></span>
-    </button>
-    <button type="button" data-view="someday">
-      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/></svg>
-      <span>やりたい</span><span class="count" id="countSomeday"></span>
-    </button>
-    <button type="button" data-view="log">
-      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20h16M7 16v-4M12 16V7M17 16v-7"/></svg>
-      <span>記録</span>
-    </button>
-  </div>
-</nav>
 
 <!-- タスク編集シート -->
 <div id="editor" class="backdrop" hidden>
@@ -112,6 +97,18 @@
       <button type="submit" class="btn primary">保存</button>
     </div>
   </form>
+</div>
+
+<!-- 記録シート -->
+<div id="logSheet" class="backdrop" hidden>
+  <div class="sheet">
+    <div class="grabber"></div>
+    <div class="sheet-head">
+      <h2>記録</h2>
+      <button type="button" class="icon-btn" data-close aria-label="閉じる">✕</button>
+    </div>
+    <div id="logBody"></div>
+  </div>
 </div>
 
 <!-- 設定シート -->
