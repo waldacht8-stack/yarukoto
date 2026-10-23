@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '13';
+const APP_VERSION = '14';
 const STORE_KEY = 'yarukoto.tasks.v1';
 const THEME_KEY = 'yarukoto.theme';
 const BADGE_KEY = 'yarukoto.badge';
@@ -172,6 +172,58 @@ function commit(msg, snap) {
   if (msg) toast(msg, snap);
 }
 
+/* ---------- タグ ---------- */
+
+const TAGS_KEY = 'yarukoto.tags.v1';
+const TAG_FILTER_KEY = 'yarukoto.tagFilter';
+// ライトでもダークでも読める、やや落ち着いた色
+const TAG_COLORS = ['#D9534F', '#E07B39', '#C49A1A', '#3E9A62', '#2A9D9A', '#4A78D8', '#8A5CD1', '#7D8590'];
+
+let tagList = (() => {
+  try {
+    const v = JSON.parse(localStorage.getItem(TAGS_KEY));
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+})();
+// 絞り込み中のタグ（'' はすべて）
+let tagFilter = safeGet(TAG_FILTER_KEY) || '';
+
+function saveTags() { safeSet(TAGS_KEY, JSON.stringify(tagList)); }
+function tagById(id) { return tagList.find((g) => g.id === id); }
+function normTagName(s) { return String(s || '').replace(/^[#＃]+/, '').trim(); }
+const taskTags = (t) => (t.tags || []).map(tagById).filter(Boolean);
+const matchesFilter = (t) => !tagFilter || (t.tags || []).includes(tagFilter);
+
+// 名前からタグを探し、なければ作る。戻り値は id の一覧
+function ensureTags(names = []) {
+  const ids = [];
+  for (const raw of names) {
+    const name = normTagName(raw);
+    if (!name) continue;
+    let g = tagList.find((x) => x.name === name);
+    if (!g) {
+      g = { id: uid(), name, color: TAG_COLORS[tagList.length % TAG_COLORS.length] };
+      tagList.push(g);
+      saveTags();
+    }
+    if (!ids.includes(g.id)) ids.push(g.id);
+  }
+  return ids;
+}
+
+// 入力の解析結果（タグ名）を、保存用のタグ id に置き換える
+function withTags({ tagNames, ...rest }) {
+  return { ...rest, tags: ensureTags(tagNames) };
+}
+
+function setTagFilter(id) {
+  tagFilter = id;
+  safeSet(TAG_FILTER_KEY, id);
+  render({ enter: true });
+}
+
 function addTask(fields) {
   const t = {
     id: uid(), title: '', note: '', due: null, time: null, repeat: 'none',
@@ -183,23 +235,27 @@ function addTask(fields) {
   return t;
 }
 
-function completeTask(id) {
-  const t = findTask(id);
-  if (!t) return;
-  const snap = JSON.stringify(tasks);
+// 完了にする（保存や描画はしない）。戻り値はトーストに出す文
+function markDone(t) {
   // 期日内に終えたかを記録しておく（期限なしは対象外）
   const late = t.due ? isOverdue(t) : null;
   if (t.repeat && t.repeat !== 'none') {
     // 完了履歴を残しつつ、本体は次回の期限へ
     tasks.push({ ...t, id: uid(), repeat: 'none', done: true, doneAt: Date.now(), late });
     t.due = nextDue(t);
-    commit(`完了！ 次回は ${fmtMD(t.due)}`, snap);
-  } else {
-    t.done = true;
-    t.doneAt = Date.now();
-    t.late = late;
-    commit(late ? '完了しました（遅れて完了）' : '完了しました', snap);
+    return `完了！ 次回は ${fmtMD(t.due)}`;
   }
+  t.done = true;
+  t.doneAt = Date.now();
+  t.late = late;
+  return late ? '完了しました（遅れて完了）' : '完了しました';
+}
+
+function completeTask(id) {
+  const t = findTask(id);
+  if (!t) return;
+  const snap = JSON.stringify(tasks);
+  commit(markDone(t), snap);
 }
 
 function uncompleteTask(id) {
@@ -260,6 +316,7 @@ function parseToken(raw) {
   if (tok === '週末') return { due: nextDow(6, true) };
   if (tok === '来週') return { due: nextDow(1, false) };
   if (tok === '!' || tok === '！') return { star: true };
+  if (/^[#＃]./.test(tok)) return { tag: normTagName(tok) };
   let m;
   if ((m = tok.match(/^([日月火水木金土])曜日?$/))) return { due: nextDow(WEEK.indexOf(m[1]), false) };
   if ((m = tok.match(/^(\d{1,2})[/／](\d{1,2})$/)) || (m = tok.match(/^(\d{1,2})月(\d{1,2})日$/))) {
@@ -297,15 +354,20 @@ function peelAttached(word) {
 function parseQuick(text) {
   const rest = [];
   const out = {};
+  // タグは複数つけられるので、上書きせずに集める
+  const take = (r) => {
+    if (r.tag) (out.tagNames = out.tagNames || []).push(r.tag);
+    else Object.assign(out, r);
+  };
   for (const tok of text.trim().split(/\s+/)) {
     if (!tok) continue;
     const r = parseToken(tok);
     if (r) {
-      Object.assign(out, r);
+      take(r);
       continue;
     }
     const [word, found] = peelAttached(tok);
-    found.forEach((f) => Object.assign(out, f));
+    found.forEach(take);
     rest.push(word);
   }
   // 日付の言葉だけを入力した場合はそのままタイトルにする
@@ -317,7 +379,11 @@ function resolveQuick(text) {
   const p = parseQuick(text);
   let due = p.due !== undefined ? p.due : quickDue !== undefined ? quickDue : today();
   if (!due && p.time) due = today();
-  return { title: p.title, due, time: p.time || null, star: !!p.star || quickStar };
+  // タグで絞り込み中なら、そのタグも付ける
+  const tagNames = [...(p.tagNames || [])];
+  const current = tagById(tagFilter);
+  if (current && !tagNames.includes(current.name)) tagNames.push(current.name);
+  return { title: p.title, due, time: p.time || null, star: !!p.star || quickStar, tagNames };
 }
 
 /* ---------- 描画 ---------- */
@@ -498,6 +564,7 @@ function taskItem(t, { showDate = true } = {}) {
     const days = diffDays(td, t.due);
     meta.push(h('span', { class: 'over' }, days > 0 ? `${days}日超過` : '時刻を過ぎています'));
   }
+  for (const g of taskTags(t)) meta.push(h('span', { class: 'tag-pill', style: `--c:${g.color}` }, g.name));
   if (t.repeat && t.repeat !== 'none') meta.push(h('span', {}, `↻ ${REPEAT_LABEL[t.repeat]}`));
   if (t.note) meta.push(h('span', { class: 'note' }, t.note.split('\n')[0]));
 
@@ -642,10 +709,11 @@ const COUNT_EMPTY = {
 let countSheetKey = null;
 
 function countTasks(key) {
-  if (key === 'over') return activeTasks().filter(isOverdue).sort(cmpTask);
-  if (key === 'today') return activeTasks().filter(isDueToday).sort(cmpTask);
+  const act = activeTasks().filter(matchesFilter);
+  if (key === 'over') return act.filter(isOverdue).sort(cmpTask);
+  if (key === 'today') return act.filter(isDueToday).sort(cmpTask);
   const td = today();
-  return tasks.filter((t) => t.done && t.doneAt && dayKey(t.doneAt) === td).sort((a, b) => b.doneAt - a.doneAt);
+  return tasks.filter((t) => t.done && t.doneAt && dayKey(t.doneAt) === td && matchesFilter(t)).sort((a, b) => b.doneAt - a.doneAt);
 }
 
 function renderCountSheet() {
@@ -774,11 +842,62 @@ function installBanner() {
 }
 
 // すべてのタスクを 1 本のリストに、期限の近い順のセクションで並べる
+/* ---------- 検索 ---------- */
+
+let searchQuery = '';
+
+function matchesQuery(t, q) {
+  return t.title.toLowerCase().includes(q)
+    || (t.note || '').toLowerCase().includes(q)
+    || taskTags(t).some((g) => g.name.toLowerCase().includes(q));
+}
+
+function buildSearch(q) {
+  const act = activeTasks().filter((t) => matchesFilter(t) && matchesQuery(t, q)).sort(cmpTask);
+  const done = tasks.filter((t) => t.done && matchesFilter(t) && matchesQuery(t, q))
+    .sort((a, b) => b.doneAt - a.doneAt).slice(0, 50);
+  if (!act.length && !done.length) {
+    return [empty('見つかりませんでした', `「${searchQuery.trim()}」を含むタスクはありません。`)];
+  }
+  const out = [];
+  if (act.length) out.push(section('見つかったタスク', act));
+  if (done.length) out.push(section('完了済み', done));
+  return out;
+}
+
+/* ---------- 週 1 回のバックアップ ---------- */
+
+const FIRST_USE_KEY = 'yarukoto.firstUse';
+const BACKUP_SNOOZE_KEY = 'yarukoto.backupSnooze';
+const BACKUP_EVERY_DAYS = 7;
+
+// 前回の書き出し（なければ使い始め）から 7 日たったら、一覧の上に案内を出す
+function backupCard() {
+  const last = Number(safeGet(EXPORT_KEY)) || Number(safeGet(FIRST_USE_KEY)) || Date.now();
+  const days = Math.floor((Date.now() - last) / 86400000);
+  if (days < BACKUP_EVERY_DAYS || !tasks.length || safeGet(BACKUP_SNOOZE_KEY) === today()) return null;
+  return h('div', { class: 'backup-card' },
+    h('div', { class: 'backup-text' },
+      h('strong', {}, '今週のバックアップ'),
+      h('span', {}, '「"ファイル"に保存」→ iCloud Drive を選ぶと保存できます'),
+    ),
+    h('div', { class: 'backup-btns' },
+      h('button', {
+        type: 'button', class: 'text-btn muted-text',
+        onclick: () => { safeSet(BACKUP_SNOOZE_KEY, today()); render(); },
+      }, 'あとで'),
+      h('button', { type: 'button', class: 'pill strong-accent', onclick: () => exportData().then(render) }, '保存する'),
+    ),
+  );
+}
+
 function buildList() {
+  const q = searchQuery.trim().toLowerCase();
+  if (q) return buildSearch(q);
   const td = today();
   const tomorrow = addDays(td, 1);
   const weekEnd = addDays(td, 7);
-  const act = activeTasks();
+  const act = activeTasks().filter(matchesFilter);
   const overdue = act.filter(isOverdue).sort(cmpTask);
   const todays = act.filter(isDueToday).sort(cmpTask);
   const tmr = act.filter((t) => t.due === tomorrow).sort(cmpTask);
@@ -786,11 +905,15 @@ function buildList() {
   const later = act.filter((t) => t.due > weekEnd).sort(cmpTask);
   const someday = act.filter((t) => !t.due)
     .sort((a, b) => (b.star ? 1 : 0) - (a.star ? 1 : 0) || b.createdAt - a.createdAt);
-  const doneToday = tasks.filter((t) => t.done && t.doneAt && dayKey(t.doneAt) === td)
+  const doneToday = tasks.filter((t) => t.done && t.doneAt && dayKey(t.doneAt) === td && matchesFilter(t))
     .sort((a, b) => b.doneAt - a.doneAt);
 
   renderCounts(overdue.length, todays.length, doneToday.length);
-  const out = [installBanner()];
+  const out = [installBanner(), backupCard()];
+  if (tagFilter && !act.length && !doneToday.length) {
+    out.push(empty('このタグのタスクはありません', '下の ＋ から追加すると、このタグが付きます。'));
+    return out;
+  }
   if (overdue.length) {
     out.push(section('期限切れ', overdue, {
       key: 'overdue',
@@ -866,6 +989,25 @@ function playEnter(el) {
   enterTimers.set(el, setTimeout(() => el.classList.remove('view-enter'), 700));
 }
 
+// 上部のタグ切り替え欄
+function renderTagBar() {
+  if (tagFilter && !tagById(tagFilter)) {
+    tagFilter = '';
+    safeSet(TAG_FILTER_KEY, '');
+  }
+  const bar = $('#tagBar');
+  bar.hidden = !tagList.length;
+  if (!tagList.length) return;
+  const chip = (id, label, color) => h('button', {
+    type: 'button',
+    class: `tag-chip${tagFilter === id ? ' on' : ''}`,
+    style: color ? `--c:${color}` : null,
+    'aria-pressed': tagFilter === id ? 'true' : 'false',
+    onclick: () => setTagFilter(id),
+  }, color ? h('i', { class: 'dot', 'aria-hidden': 'true' }) : null, label);
+  bar.replaceChildren(chip('', 'すべて'), ...tagList.map((g) => chip(g.id, g.name, g.color)));
+}
+
 function renderLog() {
   $('#logBody').replaceChildren(...buildLog().filter(Boolean));
 }
@@ -876,6 +1018,7 @@ function render({ enter = false } = {}) {
   const now = new Date();
   $('#todayDate').textContent = `${now.getMonth() + 1}月${now.getDate()}日`;
   $('#todayDow').textContent = `${WEEK[now.getDay()]}曜日`;
+  renderTagBar();
   list.replaceChildren(...buildList().filter(Boolean));
   if (!$('#logSheet').hidden) renderLog();
   if (!$('#countSheet').hidden) renderCountSheet();
@@ -1108,6 +1251,7 @@ function openPeek(id, sourceRow) {
     ['期限', t.due ? `${fmtMD(t.due)}${t.time ? ` ${t.time}` : ''}` : 'なし'],
     ['くり返し', t.repeat && t.repeat !== 'none' ? REPEAT_LABEL[t.repeat] : 'なし'],
     ['重要', t.star ? '★ 重要' : '—'],
+    ['タグ', taskTags(t).map((g) => `#${g.name}`).join(' ') || '—'],
     ['作成', t.createdAt ? stamp(t.createdAt) : '—'],
   ];
   if (t.done && t.doneAt) info.push(['完了', stamp(t.doneAt)]);
@@ -1283,17 +1427,58 @@ function openEditor(id, preset = {}) {
   editorBase = { due: $('#fDue').value, time: $('#fTime').value };
   titleTouched = false;
   $('#titleHint').textContent = '';
+  editorTags = new Set(t.tags || []);
+  renderTagPick();
   syncDue();
   syncRepeat();
   openSheet($('#editor'));
   if (!id) $('#fTitle').focus();
 }
 
+// 編集画面のタグ選び
+let editorTags = new Set();
+
+function renderTagPick() {
+  const box = $('#tagPick');
+  const chips = tagList.map((g) => {
+    const on = editorTags.has(g.id);
+    return h('button', {
+      type: 'button',
+      class: `tag-chip${on ? ' on' : ''}`,
+      style: `--c:${g.color}`,
+      'aria-pressed': on ? 'true' : 'false',
+      onclick: () => {
+        if (on) editorTags.delete(g.id);
+        else editorTags.add(g.id);
+        renderTagPick();
+      },
+    }, h('i', { class: 'dot', 'aria-hidden': 'true' }), g.name);
+  });
+  const input = h('input', { type: 'text', class: 'tag-new', placeholder: '＋ 新しいタグ', 'aria-label': '新しいタグ', enterkeyhint: 'done' });
+  const addNew = () => {
+    const name = normTagName(input.value);
+    if (!name) return;
+    ensureTags([name]).forEach((id) => editorTags.add(id));
+    renderTagPick();
+    $('#tagPick .tag-new').focus();
+  };
+  // Enter でフォームが保存されないように止めて、タグだけ作る
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addNew();
+    }
+  });
+  input.addEventListener('change', addNew);
+  box.replaceChildren(...chips, input);
+}
+
 function saveEditor(e) {
   e.preventDefault();
   // 日付として読み取った部分はタイトルから外す（タイトルを書き換えたときだけ）
   const raw = $('#fTitle').value.trim();
-  const title = titleTouched ? parseQuick(raw).title : raw;
+  const parsed = titleTouched ? parseQuick(raw) : null;
+  const title = parsed ? parsed.title : raw;
   if (!title) {
     $('#fTitle').focus();
     return;
@@ -1305,6 +1490,8 @@ function saveEditor(e) {
     time: $('#fTime').value || null,
     repeat: $('#fRepeat').value,
     star: $('#fStar').checked,
+    // 選んだタグと、タイトルに書いた #タグ
+    tags: [...new Set([...editorTags, ...ensureTags(parsed?.tagNames)])],
   };
   if (!data.due && (data.time || data.repeat !== 'none')) data.due = today();
   data.monthDay = data.repeat === 'monthly' && data.due ? parseYmd(data.due).getDate() : undefined;
@@ -1353,7 +1540,7 @@ function hideToast() {
 /* ---------- バックアップ ---------- */
 
 async function exportData() {
-  const json = JSON.stringify({ app: 'yarukoto', version: 1, exportedAt: new Date().toISOString(), tasks }, null, 2);
+  const json = JSON.stringify({ app: 'yarukoto', version: 2, exportedAt: new Date().toISOString(), tasks, tags: tagList }, null, 2);
   const name = `yarukoto-${today()}.json`;
   const file = new File([json], name, { type: 'application/json' });
   const done = () => {
@@ -1388,6 +1575,10 @@ async function importData(file) {
     if (!confirm(`${list.length} 件のタスクを読み込みます。いまのデータは置き換わります。よろしいですか？`)) return;
     const snap = JSON.stringify(tasks);
     tasks = list;
+    if (Array.isArray(data.tags)) {
+      tagList = data.tags.filter((g) => g && typeof g.id === 'string' && typeof g.name === 'string');
+      saveTags();
+    }
     closeSheet($('#settings'));
     commit('読み込みました', snap);
   } catch (err) {
@@ -1410,7 +1601,8 @@ function updateHint() {
     return;
   }
   const where = r.due ? dueLabel({ due: r.due, time: r.time }) : 'やりたいこと';
-  $('#hint').textContent = `→ ${where}${r.star ? ' · ★' : ''} に追加`;
+  const tags = r.tagNames.map((n) => ` #${n}`).join('');
+  $('#hint').textContent = `→ ${where}${r.star ? ' · ★' : ''}${tags} に追加`;
 }
 
 /* ---------- 追加用の入力欄 ---------- */
@@ -1502,7 +1694,7 @@ function quickAdd() {
     return;
   }
   if (el.classList.contains('sent')) return;
-  const t = addTask(resolveQuick(text));
+  const t = addTask(withTags(resolveQuick(text)));
   persist();
   el.classList.add('sent');
   if (!reduceMotion()) {
@@ -1553,7 +1745,9 @@ $('#quickChips').addEventListener('click', (e) => {
 });
 function openDetailEditor() {
   const text = $('#quickInput').value;
-  const preset = text.trim() ? resolveQuick(text) : { due: quickDue !== undefined ? quickDue : today(), star: quickStar };
+  const preset = text.trim()
+    ? withTags(resolveQuick(text))
+    : { due: quickDue !== undefined ? quickDue : today(), star: quickStar, tags: tagFilter ? [tagFilter] : [] };
   $('#quickInput').value = '';
   closeComposer();
   openEditor(null, preset);
@@ -1597,6 +1791,8 @@ $('#settingsBtn').addEventListener('click', () => {
   refreshBadgeStatus();
   refreshExportStatus();
   syncBadgeRange();
+  renderTagManager();
+  $('#reviewSwitch').checked = safeGet(REVIEW_AUTO_KEY) !== '0';
   applyTheme(currentTheme());
   openSheet($('#settings'));
 });
@@ -1637,7 +1833,7 @@ function bulkAdd(text) {
   for (const line of lines) {
     const p = parseQuick(line);
     const due = p.due || (p.time ? today() : null);
-    addTask({ title: p.title, due, time: p.time || null, star: !!p.star });
+    addTask({ title: p.title, due, time: p.time || null, star: !!p.star, tags: ensureTags(p.tagNames) });
   }
   commit(`${lines.length} 件を追加しました`, snap);
   return lines.length;
@@ -1687,12 +1883,392 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     render();
     updateBadge();
+    maybeAutoReview();
   }
 });
 setInterval(() => {
   if (document.visibilityState === 'visible' && $('#editor').hidden) render();
   updateBadge();
 }, 60 * 1000);
+
+/* ---------- 検索欄 ---------- */
+
+function openSearch() {
+  $('#searchRow').hidden = false;
+  $('#headArea').classList.add('searching');
+  $('#searchInput').focus();
+}
+
+function closeSearch() {
+  searchQuery = '';
+  $('#searchInput').value = '';
+  $('#searchInput').blur();
+  $('#searchRow').hidden = true;
+  $('#headArea').classList.remove('searching');
+  render({ enter: true });
+}
+
+$('#searchBtn').addEventListener('click', () => {
+  if ($('#searchRow').hidden) openSearch();
+  else closeSearch();
+});
+$('#searchCancel').addEventListener('click', closeSearch);
+$('#searchInput').addEventListener('input', (e) => {
+  searchQuery = e.target.value;
+  render();
+});
+// 検索キーでキーボードだけ閉じる（結果は残す）
+$('#searchInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    e.target.blur();
+  }
+});
+
+/* ---------- タグの管理（設定） ---------- */
+
+function renderTagManager() {
+  const box = $('#tagManager');
+  const counts = new Map();
+  for (const t of activeTasks()) for (const id of t.tags || []) counts.set(id, (counts.get(id) || 0) + 1);
+
+  const rows = tagList.map((g) => {
+    const name = h('input', { type: 'text', class: 'tag-name', value: g.name, 'aria-label': 'タグの名前', enterkeyhint: 'done' });
+    name.addEventListener('change', () => {
+      const v = normTagName(name.value);
+      if (!v || tagList.some((x) => x !== g && x.name === v)) {
+        name.value = g.name;
+        if (v) toast('同じ名前のタグがあります');
+        return;
+      }
+      g.name = v;
+      saveTags();
+      render();
+    });
+    name.addEventListener('keydown', (e) => { if (e.key === 'Enter') name.blur(); });
+    return h('div', { class: 'tag-row' },
+      h('button', {
+        type: 'button',
+        class: 'tag-color',
+        style: `--c:${g.color}`,
+        'aria-label': `${g.name} の色を変える`,
+        onclick: () => {
+          g.color = TAG_COLORS[(TAG_COLORS.indexOf(g.color) + 1) % TAG_COLORS.length];
+          saveTags();
+          render();
+          renderTagManager();
+        },
+      }),
+      name,
+      h('span', { class: 'tag-count' }, `${counts.get(g.id) || 0}件`),
+      h('button', {
+        type: 'button',
+        class: 'tag-del',
+        'aria-label': `${g.name} を削除`,
+        onclick: () => {
+          if (!confirm(`タグ「${g.name}」を削除しますか？\nタスクからもこのタグが外れます。`)) return;
+          tagList = tagList.filter((x) => x !== g);
+          for (const t of tasks) if (t.tags) t.tags = t.tags.filter((id) => id !== g.id);
+          saveTags();
+          persist();
+          render();
+          renderTagManager();
+        },
+      }, '×'),
+    );
+  });
+
+  const input = h('input', { type: 'text', class: 'tag-name', placeholder: '新しいタグの名前', 'aria-label': '新しいタグの名前', enterkeyhint: 'done' });
+  const add = () => {
+    const v = normTagName(input.value);
+    if (!v) return;
+    ensureTags([v]);
+    render();
+    renderTagManager();
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      add();
+    }
+  });
+  const addRow = h('div', { class: 'tag-row add' },
+    h('span', { class: 'tag-color ghost', 'aria-hidden': 'true' }),
+    input,
+    h('button', { type: 'button', class: 'pill', onclick: add }, '追加'));
+
+  box.replaceChildren(
+    ...(rows.length ? rows : [h('p', { class: 'set-note' }, 'タグはまだありません。追加するときに「#タグ名」と書いても作れます。')]),
+    addRow,
+  );
+}
+
+/* ---------- 朝の見直し ---------- */
+
+const REVIEW_KEY = 'yarukoto.reviewedOn';
+const REVIEW_AUTO_KEY = 'yarukoto.reviewAuto';
+// 判断ごとに、カードが飛んでいく向き
+const REVIEW_DIR = { today: [1, 0], tomorrow: [-1, 0], done: [0, -1], drop: [0, 1], date: [0, 1] };
+let rv = null;
+
+function reviewCandidates() {
+  return [...activeTasks().filter(isOverdue).sort(cmpTask), ...activeTasks().filter(isDueToday).sort(cmpTask)];
+}
+
+// その日に初めて開いたときに 1 回だけ出す
+function maybeAutoReview() {
+  if (rv || safeGet(REVIEW_AUTO_KEY) === '0' || safeGet(REVIEW_KEY) === today()) return;
+  if (!reviewCandidates().length) return;
+  openReview();
+}
+
+function openReview() {
+  const ids = reviewCandidates().map((t) => t.id);
+  if (!ids.length) {
+    toast('見直すタスクはありません');
+    return;
+  }
+  safeSet(REVIEW_KEY, today());
+  rv = { ids, index: 0, history: [], busy: false, counts: { today: 0, tomorrow: 0, done: 0, drop: 0, date: 0 } };
+  const el = $('#review');
+  clearTimeout(closeTimers.get(el));
+  el.classList.remove('closing', 'finished');
+  el.hidden = false;
+  void el.offsetWidth;
+  el.classList.add('open');
+  document.body.classList.add('reviewing');
+  buildReviewStack(true);
+}
+
+function closeReview() {
+  if (!rv) return;
+  rv = null;
+  const el = $('#review');
+  el.classList.remove('open');
+  el.classList.add('closing');
+  document.body.classList.remove('reviewing');
+  closeTimers.set(el, setTimeout(() => {
+    el.hidden = true;
+    el.classList.remove('closing');
+    $('#reviewStack').replaceChildren();
+  }, reduceMotion() ? 0 : SHEET_CLOSE_MS));
+  render({ enter: true });
+}
+
+function reviewCard(t) {
+  const over = isOverdue(t);
+  const days = over ? diffDays(today(), t.due) : 0;
+  const when = over
+    ? `期限切れ · ${days > 0 ? `${days}日超過` : '時刻を過ぎています'}`
+    : `今日${t.time ? ` ${t.time}` : ''}`;
+  const tags = taskTags(t);
+  return h('div', { class: `rv-card${over ? ' over' : ''}`, 'data-id': t.id },
+    h('div', { class: 'rv-when' }, when),
+    h('div', { class: 'rv-title' }, t.title),
+    t.note ? h('div', { class: 'rv-note' }, t.note) : null,
+    tags.length ? h('div', { class: 'rv-tags' }, tags.map((g) => h('span', { class: 'tag-pill', style: `--c:${g.color}` }, g.name))) : null,
+    h('div', { class: 'rv-due' },
+      t.due ? `期限 ${fmtMD(t.due)}${t.time ? ` ${t.time}` : ''}` : '',
+      t.repeat && t.repeat !== 'none' ? `　↻ ${REPEAT_LABEL[t.repeat]}` : ''),
+    h('span', { class: 'rv-stamp s-today', 'aria-hidden': 'true' }, '今日やる'),
+    h('span', { class: 'rv-stamp s-tomorrow', 'aria-hidden': 'true' }, '明日へ'),
+    h('span', { class: 'rv-stamp s-done', 'aria-hidden': 'true' }, '済んだ'),
+  );
+}
+
+function reviewSummary() {
+  const c = rv.counts;
+  const rows = [['今日やる', c.today], ['明日へ', c.tomorrow], ['日付を変更', c.date], ['済んだ', c.done], ['やめる', c.drop]]
+    .filter(([, n]) => n);
+  return h('div', { class: 'rv-card rv-summary', style: '--depth:0' },
+    h('div', { class: 'rv-when' }, '見直し完了'),
+    h('div', { class: 'rv-title' }, c.today ? `今日は ${c.today} 件やりましょう` : '今日の予定が決まりました'),
+    rows.length ? h('dl', { class: 'rv-result' }, rows.flatMap(([k, n]) => [h('dt', {}, k), h('dd', {}, `${n}件`)])) : null,
+    h('button', { type: 'button', class: 'btn primary', onclick: closeReview }, 'はじめる'),
+  );
+}
+
+function updateReviewProgress() {
+  const total = rv.ids.length;
+  const finished = rv.index >= total;
+  $('#reviewProgress').textContent = `${Math.min(rv.index + 1, total)} / ${total}`;
+  $('#review').classList.toggle('finished', finished);
+  $('#reviewUndo').disabled = !rv.history.length;
+}
+
+// 上から 3 枚を重ねて置く（一番上が DOM の最後）
+function buildReviewStack(animate) {
+  const stack = $('#reviewStack');
+  if (rv.index >= rv.ids.length) {
+    stack.replaceChildren(reviewSummary());
+    updateReviewProgress();
+    return;
+  }
+  const cards = [];
+  for (let i = rv.index; i < rv.ids.length && cards.length < 3; i++) {
+    const t = findTask(rv.ids[i]);
+    if (t) cards.push(reviewCard(t));
+  }
+  cards.forEach((c, d) => c.style.setProperty('--depth', d));
+  stack.replaceChildren(...cards.reverse());
+  const top = stack.lastElementChild;
+  if (animate && top && !reduceMotion()) {
+    top.animate([{ opacity: 0, transform: 'translateY(24px) scale(.94)' }, { opacity: 1, transform: 'none' }], { duration: 460, easing: EASE });
+  }
+  if (top) attachReviewDrag(top);
+  updateReviewProgress();
+}
+
+// 一番上を外したあと、残りのカードを 1 段ずつ繰り上げ、次のカードを奥に足す
+function advanceReviewStack() {
+  rv.index++;
+  if (rv.index >= rv.ids.length) {
+    buildReviewStack(true);
+    return;
+  }
+  const stack = $('#reviewStack');
+  for (const c of stack.querySelectorAll('.rv-card')) {
+    c.style.setProperty('--depth', Number(c.style.getPropertyValue('--depth')) - 1);
+  }
+  const next = rv.index + 2;
+  if (next < rv.ids.length) {
+    const t = findTask(rv.ids[next]);
+    if (t) {
+      const c = reviewCard(t);
+      c.style.setProperty('--depth', 2);
+      c.classList.add('rv-enter');
+      stack.prepend(c);
+    }
+  }
+  const top = stack.lastElementChild;
+  if (top) attachReviewDrag(top);
+  updateReviewProgress();
+}
+
+function applyReview(t, kind, date) {
+  const td = today();
+  if (kind === 'today') {
+    t.due = td;
+    if (t.time && t.time < nowHM()) t.time = null;
+  } else if (kind === 'tomorrow') {
+    t.due = addDays(td, 1);
+  } else if (kind === 'date') {
+    t.due = date;
+  } else if (kind === 'done') {
+    markDone(t);
+  } else if (kind === 'drop') {
+    tasks = tasks.filter((x) => x.id !== t.id);
+  }
+}
+
+function flyOut(card, kind) {
+  card.classList.add(`fly-${kind}`);
+  if (reduceMotion() || !card.animate) return Promise.resolve();
+  const [dx, dy] = REVIEW_DIR[kind];
+  const fade = kind === 'drop' || kind === 'date';
+  const anim = card.animate(
+    [{ transform: card.style.transform || 'none', opacity: 1 },
+      { transform: `translate(${dx * 600}px, ${dy * 800}px) rotate(${dx * 22}deg)`, opacity: fade ? 0 : 1 }],
+    { duration: 420, easing: 'cubic-bezier(.4, 0, .9, .6)', fill: 'forwards' },
+  );
+  return Promise.race([anim.finished.catch(() => {}), new Promise((r) => setTimeout(r, 480))]);
+}
+
+function reviewDecide(kind, date) {
+  if (!rv || rv.busy || rv.index >= rv.ids.length) return;
+  const top = $('#reviewStack').lastElementChild;
+  const t = findTask(rv.ids[rv.index]);
+  if (!top || !t) return;
+  rv.busy = true;
+  rv.history.push({ snap: JSON.stringify(tasks), kind });
+  applyReview(t, kind, date);
+  rv.counts[kind]++;
+  persist();
+  flyOut(top, kind).then(() => {
+    if (!rv) return;
+    top.remove();
+    rv.busy = false;
+    advanceReviewStack();
+  });
+}
+
+function reviewUndo() {
+  if (!rv || rv.busy || !rv.history.length) return;
+  const last = rv.history.pop();
+  tasks = JSON.parse(last.snap);
+  rv.counts[last.kind]--;
+  rv.index--;
+  persist();
+  buildReviewStack(true);
+}
+
+// スワイプの向きから判断を決める（下向きは使わない）
+function reviewKindOf(dx, dy) {
+  if (Math.abs(dx) < 16 && Math.abs(dy) < 16) return null;
+  if (-dy > Math.abs(dx)) return 'done';
+  if (Math.abs(dx) >= Math.abs(dy)) return dx > 0 ? 'today' : 'tomorrow';
+  return null;
+}
+
+function attachReviewDrag(card) {
+  let x0 = null;
+  let y0 = 0;
+  let dx = 0;
+  let dy = 0;
+  let t0 = 0;
+  card.addEventListener('pointerdown', (e) => {
+    if (!rv || rv.busy) return;
+    x0 = e.clientX;
+    y0 = e.clientY;
+    dx = 0;
+    dy = 0;
+    t0 = Date.now();
+    card.classList.add('dragging');
+    try { card.setPointerCapture(e.pointerId); } catch { /* 取れなくても続行できる */ }
+  });
+  card.addEventListener('pointermove', (e) => {
+    if (x0 == null) return;
+    dx = e.clientX - x0;
+    dy = e.clientY - y0;
+    card.style.transform = `translate(${dx}px, ${dy}px) rotate(${dx / 18}deg)`;
+    card.dataset.lean = reviewKindOf(dx, dy) || '';
+    card.style.setProperty('--lean', Math.min(1, Math.hypot(dx, dy) / 110).toFixed(2));
+  });
+  const end = () => {
+    if (x0 == null) return;
+    x0 = null;
+    card.classList.remove('dragging');
+    const dist = Math.hypot(dx, dy);
+    const speed = dist / Math.max(1, Date.now() - t0);
+    const kind = reviewKindOf(dx, dy);
+    if (kind && (dist > 110 || (speed > 0.6 && dist > 40))) {
+      reviewDecide(kind);
+    } else {
+      card.style.transform = '';
+      card.dataset.lean = '';
+    }
+  };
+  card.addEventListener('pointerup', end);
+  card.addEventListener('pointercancel', end);
+}
+
+$('#review').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-review]');
+  if (btn) reviewDecide(btn.dataset.review);
+  if (e.target.closest('[data-close-review]')) closeReview();
+});
+$('#reviewUndo').addEventListener('click', reviewUndo);
+$('#reviewDate').addEventListener('change', (e) => {
+  if (e.target.value) reviewDecide('date', e.target.value);
+  e.target.value = '';
+});
+$('#reviewSwitch').addEventListener('change', (e) => {
+  safeSet(REVIEW_AUTO_KEY, e.target.checked ? '1' : '0');
+});
+$('#reviewNowBtn').addEventListener('click', () => {
+  closeSheet($('#settings'));
+  setTimeout(openReview, reduceMotion() ? 0 : SHEET_CLOSE_MS);
+});
 
 /* ---------- 起動 ---------- */
 
@@ -1719,6 +2295,8 @@ document.addEventListener('touchmove', (e) => {
 $('#list').addEventListener('scroll', () => {
   $('#headArea').classList.toggle('scrolled', $('#list').scrollTop > 2);
 }, { passive: true });
+if (!safeGet(FIRST_USE_KEY)) safeSet(FIRST_USE_KEY, String(Date.now()));
 applyTheme(currentTheme());
 render({ enter: true });
+setTimeout(maybeAutoReview, 500);
 updateBadge();

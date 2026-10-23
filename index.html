@@ -33,6 +33,9 @@
       <span class="today-dow" id="todayDow"></span>
     </div>
     <div class="head-actions">
+      <button type="button" id="searchBtn" class="icon-btn" aria-label="検索">
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+      </button>
       <button type="button" id="logBtn" class="icon-btn" aria-label="記録">
         <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 20h16M7 16v-4M12 16V7M17 16v-7"/></svg>
       </button>
@@ -42,7 +45,12 @@
     </div>
   </header>
 
+  <div class="search-row" id="searchRow" hidden>
+    <input type="search" id="searchInput" placeholder="タスク・メモ・タグを検索" aria-label="検索" enterkeyhint="search" autocomplete="off">
+    <button type="button" id="searchCancel" class="text-btn">キャンセル</button>
+  </div>
   <div class="counts" id="counts"></div>
+  <div class="tag-bar" id="tagBar" hidden></div>
   </div>
 
   <main id="list"></main>
@@ -136,6 +144,11 @@
         <button type="button" data-v="monthly">毎月</button>
       </div>
       <input type="hidden" id="fRepeat" value="none">
+    </div>
+
+    <div class="field">
+      <div class="field-head"><span>タグ</span></div>
+      <div class="tag-pick" id="tagPick"></div>
     </div>
 
     <label class="switch-row">
@@ -232,6 +245,27 @@
     </section>
 
     <section class="set-group">
+      <h3 class="set-title">朝の見直し</h3>
+      <div class="set-card">
+        <label class="set-row">
+          <span class="set-text">
+            <span>1日の最初に開いたときに出す</span>
+            <span class="set-sub">期限切れと今日のタスクを、スワイプで仕分けます</span>
+          </span>
+          <input type="checkbox" id="reviewSwitch" class="switch">
+        </label>
+        <div class="set-buttons one">
+          <button type="button" class="btn" id="reviewNowBtn">今すぐ見直す</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="set-group">
+      <h3 class="set-title">タグ</h3>
+      <div class="set-card" id="tagManager"></div>
+    </section>
+
+    <section class="set-group">
       <h3 class="set-title">入力</h3>
       <div class="set-card">
         <details class="set-acc">
@@ -254,6 +288,7 @@
               <li><code>牛乳を買う 明日</code></li>
               <li><code>歯医者 11/5 15時</code></li>
               <li><code>ゴミ出し 金曜 !</code>（! で重要）</li>
+              <li><code>歯医者 11/16 #病院</code>（# でタグ）</li>
               <li>今日 / 明日 / 明後日 / 週末 / 来週 / 月曜〜日曜 / 11/5 / 18:30 / 9時半</li>
               <li>右スワイプで完了、左スワイプで明日（または今日）へ</li>
             </ul>
@@ -277,6 +312,38 @@
     </section>
 
     <p class="version" id="appVersion"></p>
+  </div>
+</div>
+
+<!-- 朝の見直し -->
+<div id="review" class="review" hidden>
+  <div class="review-scrim"></div>
+  <div class="review-wrap" role="dialog" aria-modal="true" aria-labelledby="reviewHeading">
+    <div class="review-top">
+      <span class="review-progress" id="reviewProgress"></span>
+      <h2 id="reviewHeading">朝の見直し</h2>
+      <button type="button" class="close-btn" data-close-review>あとで</button>
+    </div>
+    <p class="review-hint">右：今日やる　左：明日へ　上：済んだ</p>
+    <div class="review-stack" id="reviewStack"></div>
+    <div class="rv-btns">
+      <button type="button" class="rv-btn" data-review="drop">
+        <span class="rv-circle"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></span>やめる
+      </button>
+      <button type="button" class="rv-btn" data-review="tomorrow">
+        <span class="rv-circle"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"/></svg></span>明日へ
+      </button>
+      <button type="button" class="rv-btn" data-review="done">
+        <span class="rv-circle ok"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>済んだ
+      </button>
+      <button type="button" class="rv-btn" data-review="today">
+        <span class="rv-circle primary"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>今日やる
+      </button>
+    </div>
+    <div class="rv-sub">
+      <button type="button" class="text-btn" id="reviewUndo">1つ戻る</button>
+      <label class="text-btn rv-date">日付を選ぶ<input type="date" id="reviewDate" class="overlay" aria-label="日付を選ぶ"></label>
+    </div>
   </div>
 </div>
 
