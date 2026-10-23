@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '14';
+const APP_VERSION = '15';
 const STORE_KEY = 'yarukoto.tasks.v1';
 const THEME_KEY = 'yarukoto.theme';
 const BADGE_KEY = 'yarukoto.badge';
